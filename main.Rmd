@@ -1,0 +1,1037 @@
+---
+title: "main"
+author: "Laura Moria"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+workspace <- paste0(Sys.getenv("NMI-SITE"), 'O 2000 - O 2001/2083.N.25 Effect ANLB pakketten op waterkwaliteit/04. Data en resultaten/')
+nmidata <- Sys.getenv("NMI_DATA")
+
+# load packages
+library(data.table)
+library(sf)
+library(ggplot2)
+
+```
+
+-   nat drasland eruit? staat nu bij water-water
+-   per collectief een overzicht ha per jaar type pakket
+-   sken je sloot aantal locaties per jaar per pakket
+-   locaties skenjesloot samenvoegen koppeling aan perceel + afstand dan check een unieke locatie per jaar en op kaart
+-   datasets maken met relevante variabelen
+-   toevoegen percentage open water, PAL, P belasting
+-   cookbook runnen
+
+## Import data
+
+```{r import geodata}
+# Load base layer with EAGs 
+EAG <- st_read(paste0(workspace,'./Beheerregister_EAG_20241218/Beheerregister_EAG_20241218.shp')) %>% st_transform(28992)
+
+# load gewaspercelen
+# brp <- st_read(paste0(nmidata,'./landgebruik/brp/products/brpgewaspercelen_2024_concept.gpkg')) %>% st_transform(28992)
+# brpagv <- st_crop(brp, st_bbox(EAG))
+# st_write(brpagv, 'brpagv.gpkg', append = FALSE)
+brpagv <- st_read('brpagv.gpkg')
+
+# load bodemschat
+# bs6  <- st_read(paste0(nmidata, "bodem/bodemschat/products/BS6/BS6_2021.gpkg")) 
+# bs6 <- st_crop(bs6,st_bbox(EAG))
+# st_write(bs6, 'bs6agv.gpkg')
+bs6 <- st_read('bs6agv.gpkg')
+pvskp <- readRDS('pvskp.rds')
+```
+
+```{r load and ppr anlb}
+# load anlb------------------------
+## collectieven: "RVV" "NHZ" "NP" "HV" 
+## perioden: 2016 tm 2021
+anlb2016 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2016.gpkg'))%>% st_transform(28992)
+setDT(anlb2016);anlb2016[,jaar:= 2016]
+anlb2017 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2017.gpkg'))%>% st_transform(28992)
+setnames(anlb2017, c('PAKKETNAAM','PAKKETCODE','DEELN_NAAM','LENGTH','AREA','COL','geom'),c('pakket','code','boer','len','opp','collectief','geom'))
+setDT(anlb2017);anlb2017[,jaar:= 2017]
+anlb2018 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2018.gpkg'))%>% st_transform(28992)
+setDT(anlb2018);anlb2018[,jaar:= 2018]
+anlb2019 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2019.gpkg'))%>% st_transform(28992)
+setDT(anlb2019);anlb2019[,jaar:= 2019]
+anlb2020 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2020.gpkg'))%>% st_transform(28992)
+setDT(anlb2020);anlb2020[,jaar:= 2020]
+anlb2021 <- st_read(paste0(workspace,'./ANLB/ANLB_AGV_2021.gpkg'))%>% st_transform(28992)
+setDT(anlb2021);anlb2021[,jaar:= 2021]
+# 2022
+anlb2022 <- copy(anlb2021)
+anlb2022[,jaar:= 2022]
+# 2023 - 2028
+anlb2023_hv <- st_read(paste0(workspace,'./ANLB/Waterpakketten 2022.shp'))%>% st_transform(28992)
+anlb2023_hv$collectief <- "HV"
+anlb2023_hv$opp <- as.numeric(st_area(anlb2023_hv))/10000
+anlb2023_hv<- st_cast(anlb2023_hv,'MULTIPOLYGON')
+setDT(anlb2023_hv)
+setnames(anlb2023_hv, c('PAKKETNAAM','geometry'),c('pakket','geom'))
+anlb2023_uo <- st_read(paste0(workspace,'./ANLB/UO 2023 alle pakketten.gpkg'))%>% st_transform(28992)
+anlb2023_uo$collectief <- "UO"
+anlb2023_rvv <- st_read(paste0(workspace,'./ANLB/beheereenheden_2023-01-01_tot_2023-12-31_26-03-2024_12_47_boerennatuur-rijn-vecht-venen.shp'))%>% st_transform(28992)
+anlb2023_rvv$collectief <- "RVV"
+anlb2023_nhz <- st_read(paste0(workspace,'./ANLB/NHZ 2023 waterpakketten.gpkg'))%>% st_transform(28992)
+anlb2023_nhz$collectief <- "NHZ"
+setDT(anlb2023_uo);setDT(anlb2023_rvv);setDT(anlb2023_nhz)
+setnames(anlb2023_rvv, 'geometry', 'geom')
+anlb2023 <- rbind(anlb2023_uo,anlb2023_rvv,anlb2023_nhz)
+anlb2023 <- anlb2023[,c('PAKKETNAAM','PAKKETCODE','DEELN_ID','LENGTH','AREA','collectief','geom')]
+setnames(anlb2023, c('PAKKETNAAM','PAKKETCODE','DEELN_ID','LENGTH','AREA','geom'),c('pakket','code','boer','len','opp','geom'))
+anlb2023 <- rbind(anlb2023,anlb2023_hv, fill = TRUE)
+anlb2023[,jaar:= 2023]
+# 2024
+anlb2024 <- copy(anlb2023)
+anlb2024[,jaar:= 2024]
+
+## alles samenvoegen ----------------
+anlb <- rbindlist(list(anlb2016,anlb2017,anlb2018,anlb2019,anlb2020,anlb2021,anlb2022,anlb2023, anlb2024), fill = TRUE, ignore.attr=TRUE)
+
+# overzichtstabel 4 pakketindeling --------------
+## anlbchecktab <- unique(anlb[,c('pakket','pakket1','pakket2','pakket3')])
+## write.csv2(anlbchecktab, file ='anlbchecktab.csv', fileEncoding = "latin4", quote = TRUE)
+# categorieen
+anlb_cat <- read.csv2(paste0(workspace,'./ANLB/anlbchecktab.csv'), sep =';', fileEncoding = "latin4")
+anlb_cat <- setDT(unique(anlb_cat[,c('pakket','pakket2','pakket3')]))
+anlb_cat <- anlb_cat[!is.na(pakket),]
+anlb <- merge(anlb[,-c('pakket2','pakket3')],anlb_cat, by = 'pakket', all.x = TRUE)
+anlb[pakket == 'hoog waterpeil\r\nverhoging 20 cm, 15 mrt tot 15 juni',pakket2 := 'water']
+anlb[pakket == 'hoog waterpeil\r\nverhoging 20 cm, 15 mrt tot 15 juni',pakket3 := 'water']
+anlb[pakket == 'plas-dras\r\n15 februari tot 15 mei, minstens 5 cm',pakket2 := 'water']
+anlb[pakket == 'plas-dras\r\n15 februari tot 15 mei, minstens 5 cm',pakket3 := 'water']
+anlb[pakket == 'verlenging Plas-dras 15 mei tot 15 juni',pakket2 := 'water']
+anlb[pakket == 'verlenging Plas-dras 15 mei tot 15 juni',pakket3 := 'water']
+
+## filter waterpakketten
+check <- as.data.table(unique(anlb$pakket[is.na(anlb$pakket2)]))
+anlb <- anlb[pakket2 == 'water',]
+#create sf object
+anlb <- anlb[,-c('fid')]
+anlb <- st_as_sf(anlb)
+unique(st_geometry_type(anlb))
+anlb <- st_cast(anlb,'MULTIPOLYGON')
+anlb <- st_make_valid(anlb)
+
+## add collectief
+anlb_col <- st_read(paste0(workspace,'./ANLB/begrenzing_collectieven_manual.shp'))%>% st_transform(28992)
+anlb <- st_join(anlb, anlb_col, left = TRUE, largest = TRUE)
+setDT(anlb)
+anlb[is.na(Naam), Naam := 'HollandseVenen']
+anlb[,collectief := Naam]
+anlb <- st_as_sf(anlb)
+
+# merge with brp
+anlb <- st_join(anlb, brpagv, left = TRUE, largest = TRUE)
+setDT(anlb)
+anlb[, jaar:= jaar.x];anlb[,jaar.x:=NULL];anlb[,jaar.y:=NULL]
+anlb <- st_as_sf(anlb)
+st_write(anlb,'anlb_merged.gpkg', append = FALSE)
+
+```
+
+```{r load anlb}
+# load merged object------------------------
+anlb <- st_read('anlb_merged.gpkg')
+```
+
+```{r import hybi}
+# data hybi
+hybi <- readRDS('../WaterEcoInzicht/data/hybi.rds') %>% as.data.table()
+ptn_monsters <- unique(hybi$monsterident[hybi$analyse == 'PTN'])
+hybi <- hybi[monsterident %in% ptn_monsters,]
+hybiloc <- st_as_sf(unique(hybi[,c("locatie","XCOORD","YCOORD")]),coords = c("XCOORD","YCOORD"),crs = 28992)
+```
+
+```{r import skenjesloot}
+skenjesloot <- list.files(path= paste0(workspace,'./skenjesloot/'), pattern=".csv", full.names =  T)
+classes <- sapply(fread(skenjesloot[8L], sep=';'), class)
+skenjesloot <- lapply(skenjesloot, fread, sep=';', colClasses = unlist(classes))
+skenjesloot <- rbindlist(skenjesloot, fill =T, use.names = T)
+# unique(skenjesloot$datum)
+skenjesloot[,datum := as.Date(datum, format = "%Y-%m-%d")]
+skenjesloot[,jaar := year(datum)]
+skenjesloot[,maand := month(datum)]
+skenjesloot[,c('xcoormonster','ycoormonster')  := list(as.integer(xcoormonster),as.integer(ycoormonster))]
+
+# correct parcodes -----------
+skenjesloot[parameterid == 'PTN_BEDKG', parameterid := 'PTN_AANWZHD']
+skenjesloot[parameterid == 'PTN_AANWZHD', parameter := 'PTN_BEDKG']
+skenjesloot[parameterid == 'PERODSLSSNG_mnd', eenheid := 'mnd']
+skenjesloot[meetwaarde == 99, meetwaarde := NA]
+# enumeratievelden toevoegen ------------------
+## baggeren5jaar
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == 'Nooit', meetwaarde := 0]
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == '1 keer', meetwaarde := 1]
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == '2 keer', meetwaarde := 2]
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == '3 keer', meetwaarde := 3]
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == '4 keer', meetwaarde := 4]
+skenjesloot[parameterid == 'BAGGEREN5JAAR'
+ & meetwaarde == 'vaker', meetwaarde := 5]
+## schonen5jaar
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == 'Nooit', meetwaarde := 0]
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == '1 keer', meetwaarde := 1]
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == '2 keer', meetwaarde := 2]
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == '3 keer', meetwaarde := 3]
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == '4 keer', meetwaarde := 4]
+skenjesloot[parameterid == 'SCHONEN5JAAR'
+ & meetwaarde == 'vaker', meetwaarde := 5]
+## ander beheerpakket
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == 'Sloot_schonen', meetwaarde := 1]
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == 'Sloot_maaien', meetwaarde := 2]
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == 'Sloot_baggeren', meetwaarde := 3]
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == 'Geen_maatregelen', meetwaarde := 4]
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == "Sloot_schonen,Sloot_baggeren", meetwaarde := 5]             
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == "Sloot_schonen,Sloot_baggeren,Sloot_maaien", meetwaarde := 6]
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == "Sloot_schonen,Sloot_maaien", meetwaarde := 7]               
+skenjesloot[parameterid == 'ANDER_BEHEERPAKKET' & meetwaarde == "Sloot_maaien,Sloot_schonen", meetwaarde := 7]
+## type/ machine schonen
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'maaikorf', meetwaarde := 1]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'hemos', meetwaarde := 2]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'ecoreiniger', meetwaarde := 3]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'spijlen', meetwaarde := 4]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'gaatjes', meetwaarde := 5]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'anders', meetwaarde := 6]
+skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'nvt', meetwaarde := 7]
+# fotodb separate
+sjs_foto <- skenjesloot[parameterid %in% c('FOTONR','FOTO_n'),]
+skenjesloot <- skenjesloot[!(parameterid %in% c('FOTONR','FOTO_n')),]
+# replace puntkomma
+skenjesloot[,meetwaarde := gsub(',','.',meetwaarde)]
+skenjesloot[,meetwaarde := as.numeric(meetwaarde)]
+
+# add par info -------------------
+parameter <- data.table::fread(paste0(workspace,'./parameterid.csv'), fill = TRUE)
+skenjesloot <- merge(skenjesloot, parameter[,c("code","naam",'pakket_agg','vraag sken je sloot', 'grootheid',"categorie","H_min", "H_max")], by.x = 'parameterid', by.y = 'code', suffixes = c('','_parameter'), all.x = TRUE)
+
+skenjesloot <- skenjesloot[!parameterid == '',]
+
+```
+
+## data verwerking
+
+```{r merge hybi anlb}
+# spatial merge met buffer van 1 meter rond pakketten
+sf_use_s2(FALSE)
+anlbhybi<- st_intersection(hybiloc, st_buffer(anlb, dist = 1), left = TRUE)
+# percentage meetlocaties grenzend aan pakketten 9.3 %
+uniqueN(anlbhybi$locatie)/uniqueN(hybi$locatie)
+# merge met hybi data
+setDT(anlbhybi)
+anlbhybi <- merge(hybi, anlbhybi[,c('locatie','pakket','pakket2','pakket3','collectief','jaar')], by = 'locatie', all.x = T, suffixes = c('hybi','anlb'), allow.cartesian = TRUE)
+# add aantal jaar anlb
+anlbhybi[,maxjaaranlb := max(jaaranlb), by = locatie]
+anlbhybi[,minjaaranlb := min(jaaranlb), by = locatie]
+setorder(anlbhybi,locatie,jaaranlb,jaarhybi)
+# metingen hybi zitten nu soms dubbel in de database! 
+# filter same year or year hybi 3 jaar > pakket
+anlbhybi[,jaarhybi := as.numeric(jaarhybi)]
+anlbhybi[jaaranlb == jaarhybi, anlb := 'ja']
+anlbhybi[is.na(anlb) & !is.na(pakket) & jaarhybi > minjaaranlb, anlb := 'dubbel']
+anlbhybi[is.na(anlb) & is.na(pakket), anlb := 'nee']
+anlbhybi[is.na(anlb) & !(jaaranlb == minjaaranlb), anlb := 'dubbel']
+anlbhybi[is.na(anlb) & jaaranlb == minjaaranlb & jaarhybi < minjaaranlb, anlb := 'nee']
+anlbhybi[,njaaranlb := jaarhybi-minjaaranlb+1]
+# unique(anlbhybi$anlb)
+# remove dubbelingen
+anlbhybi <- anlbhybi[!anlb == 'dubbel',]
+# let op er zitten nu meer records in anlb hybi terwijl jaar een match is (mogelijk door meerdere monsters in een jaar?)
+# nu nog maar 0.01% locaties
+uniqueN(anlbhybi$locatie[anlb = "ja"])/uniqueN(hybi$locatie)
+# check dubbelingen
+check <- anlbhybi[parameter == "SUBMSPTN" & compartiment == "EZ",
+                c('monsterident','locatie','jaaranlb','jaarhybi',
+                  'minjaaranlb','maxjaaranlb',
+                'pakket','pakket3','anlb','njaaranlb')]
+
+# alternatief 1: merge with gebiedstype agrarisch
+anlbhybi <- merge(anlbhybi, EAG, by.x = 'EAGIDENT',by.y = 'Code', all.x = T)
+# sel only agrarisch (421380)
+# anlbhybi <- anlbhybi[gebiedstype == 'agrarisch',]
+
+# alternatief 2: filter alleen EAGs met anlb 313006 over van 850953
+setDT(anlbhybi)
+anlbeag <- unique(anlbhybi[anlbhybi$anlb == 'ja', c('EAGIDENT', 'jaarhybi')])
+anlbeag[,eagjaar:= paste0(EAGIDENT,jaarhybi)]
+anlbhybi <- anlbhybi[paste0(EAGIDENT,jaarhybi) %in% anlbeag$eagjaar,]
+
+# check data --------------
+check <- anlbhybi[parameter == "SUBMSPTN",
+                c('locatie','jaaranlb','jaarhybi',
+                  'minjaaranlb','maxjaaranlb',
+                'pakket','pakket3','anlb','njaaranlb')]
+
+# for spatial check
+anlbhybi <- st_as_sf(anlbhybi, coords = c("XCOORD","YCOORD"), crs = 28992)
+geoanlbhybi <- anlbhybi[anlbhybi$parameter == "SUBMSPTN",
+              c('locatie','jaaranlb','jaarhybi',
+                'pakket','pakket3','anlb','geometry')]
+geoanlbhybi <- st_as_sf(geoanlbhybi)
+st_write(geoanlbhybi, 'geoanlbhybi.gpkg', append=FALSE)
+
+```
+
+```{r data enrichment anlbhybi}
+setDT(anlbhybi)
+anlbhybi[submers == 1,n_soort_sub := uniqueN(biotaxonnaam),by = c('monsterident','locatie','jaarhybi','jaaranlb','anlb','watertype','EAGIDENT','compartiment')]
+anlbhybi[emers == 1, n_soort_ems := uniqueN(biotaxonnaam),by = c('monsterident','locatie','jaarhybi','jaaranlb','anlb','watertype','EAGIDENT','compartiment')]
+anlbhybi[compartiment == 'OR' & parameterid == 'PTN_BEDKG_%' & parameter == "", n_soort_oever := uniqueN(biotaxonnaam),by = c('monsterident','locatie','jaarhybi','jaaranlb','anlb','watertype','EAGIDENT','compartiment')]
+# doorzicht/waterdiepte
+zichtdte <- anlbhybi[,meetwaarde[parameterid == "ZICHT_m"]/meetwaarde[parameterid == "WATDTE_m"], by = c('monsterident','locatie','jaarhybi','jaaranlb','anlb','watertype','EAGIDENT')]
+zichtdte[,parameterid := 'zichtdte']
+zichtdte[,parameter := 'zichtdte']
+anlbhybi <- rbindlist(list(anlbhybi,zichtdte), fill = TRUE)
+anlbhybi[is.na(pakket3),pakket3 := 'geen anlb']
+
+# checks
+check <- anlbhybi[!is.na(n_soort_oever) & anlb == 'bufferzone',] 
+# slechts 7 EAGS [1] "2502-EAG-1"  "2560-EAG-2"  "3110-EAG-5"  "3300-EAG-17" "3350-EAG-2" [6] "3360-EAG-1"  "3360-EAG-14" "3360-EAG-15"
+# pakket bufferzone, nvo en water ontbreekt en in 
+
+```
+
+```{r data processing skenjesloot}
+# add aantal paketten
+npakket <- skenjesloot[,sum(meetwaarde[grepl('^BEHPK', parameterid) | parameterid == 'BEHRPKNVO_SOORT'], na.rm = TRUE), by = c('monsterident','externereferentie','jaar')]
+npakket[,parameterid := 'BEHP_AANWZG']
+npakket[,parameter := 'pktaanwez']
+npakket[,naam := 'aantal beheerpakketten']
+npakket[,meetwaarde := V1]
+skenjesloot <- rbindlist(list(skenjesloot,npakket), fill = TRUE)
+
+# locaties aggregeren binnen een afstand van 150 meter op zelfde 1.5 meter gebufferde perceel ----------------------
+skenjeslootloc <- unique(skenjesloot[,c("externereferentie","jaar","xcoormonster","ycoormonster")])
+skenjeslootloc[,ident:= paste0(xcoormonster,"_",ycoormonster)]
+skenjeslootloc <-skenjeslootloc[!is.na(xcoormonster),]
+skenjeslootloc <- st_as_sf(skenjeslootloc,coords = c("xcoormonster","ycoormonster"),crs = 28992) #2182
+skenjeslootloc <- st_join(skenjeslootloc, st_buffer(brpagv[!(brpagv$category == 'Landschapselement'),], dist = 5), left = TRUE, largest = TRUE)
+setDT(skenjeslootloc)
+check<- unique(skenjeslootloc[is.na(skenjeslootloc$ref_id),c("externereferentie",'ident','jaar.x','ref_id')])
+skenjeslootloc[,jaar:=jaar.x]
+skenjeslootloc[,brp_nr := rep(seq_len(.N), each = 1, length.out = .N), by = 'ref_id']
+skenjeslootloc[,dist := st_distance(geometry[brp_nr == 1], geometry), by ='ref_id']
+skenjeslootloc[,dist := as.numeric(dist)]
+
+sslocmatch <- skenjeslootloc[brp_nr == 1,]
+skenjeslootloc <- merge(skenjeslootloc, sslocmatch[,c('externereferentie','ref_id', 'jaar')], by = 'ref_id', suffixes = c('','_match'), all.x = TRUE, all.y = FALSE)
+# combine locs within 100 meter on same brp gewasperceel in verschillende jaren (soms zijn het wel andere sloten)
+skenjeslootloc[, id := externereferentie]
+skenjeslootloc[dist < 150 & !(jaar == jaar_match), id := externereferentie_match]
+
+# join with EAG
+skenjeslootloc <- st_as_sf(skenjeslootloc)
+skenjeslootloc <- st_join(skenjeslootloc, EAG, left = TRUE, largest = TRUE)
+
+# join with npakket
+setDT(skenjeslootloc)
+skenjeslootloc <- merge(skenjeslootloc, npakket[,c('externereferentie','meetwaarde')], by= 'externereferentie')
+
+# export
+skenjeslootloc <- st_as_sf(skenjeslootloc)
+st_write(skenjeslootloc, 'skenjeslootloc.gpkg', append = FALSE)
+
+# check in GIS door te kleuren op nieuwe locatiecode
+# check als tabel/plot
+setDT(skenjeslootloc)
+skenjeslootloc[, nmeetjaar := uniqueN(jaar), by = 'id']
+
+ggplot(data = skenjeslootloc)+
+  geom_histogram(aes(x = nmeetjaar, fill = as.factor(jaar)), binwidth = 1) +
+  guides(fill=guide_legend(title=''))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Aantal gemeten jaren per locatie in (s)Ken je sloot") +
+    labs(x="",y="aantal unieke monsters (metingen)")
+
+```
+
+## visualisatie
+
+```{r anlb}
+# overzichttabel obv csv bestanden
+brp_anlb <- st_join( brpagv, anlb, left = TRUE, largest = TRUE)
+setDT(brp_anlb)
+ov_anlb <- dcast(brp_anlb, pakket2+pakket3+collectief~jaar.y, fun.aggregate = uniqueN, value.var = 'ref_id.x')
+fwrite(ov_anlb, file= paste0('ov_anlb.csv'), sep = ';', dec ='.', )
+
+npakket <- dcast(anlb, ref_id+jaar~., fun.aggregate = uniqueN, value.var = 'pakket')
+
+ggplot(data = npakket)+
+  geom_bar(aes(x = jaar, fill = as.factor(`.`)), 
+           position = 'stack') +
+  scale_fill_discrete(labels = c('1 pakket','2 pakketten','3 pakketten','4 pakketten','5 pakketten','6 pakketten','7 pakketten','8 pakketten'))+
+  guides(fill=guide_legend(title=''))+
+  scale_x_continuous(n.breaks = 8, labels = scales::number_format(accuracy = 1, big.mark = ''))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Anlb beheerpakketten per brp eenheid") +
+    labs(x="",y="aantal percelen")
+
+
+```
+
+```{r data exploration hybi}
+# "PTN_BEDKG_%" "PTN_BREEDTE_m" "PTN_LENGTFTE_%" 
+# "SUBMSPTN" "OEVPTN" "EMSPTN"  "KROOS" 
+setDT(anlbhybi)
+# add N obs
+anlbhybi[,n_obs:=uniqueN(monsterident),by =c('parameterid','parameter','pakket3','compartiment','jaarhybi')]
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%"  
+                               & parameter == "EMSPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=100, label = n_obs))+
+  facet_wrap(.~jaarhybi)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking emers") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%"  
+                               & compartiment == "EZ" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = n_soort_ems)) +
+  geom_text(aes(x = pakket3, y=max(anlbhybi$n_soort_ems, na.rm = T), label = n_obs))+
+  facet_wrap(watertype~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Aantal unieke emerse soorten") +
+    labs(x="",y="n")
+  # ylim(0,15)
+
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%"  
+                               & compartiment == "EZ" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = n_soort_sub)) +
+  geom_text(aes(x = pakket3, y=max(anlbhybi$n_soort_sub, na.rm = TRUE), label = n_obs))+
+  facet_wrap(watertype~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Aantal unieke submerse soorten") +
+    labs(x="",y="n")
+
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%" & parameter == ""
+                               & compartiment == "OR" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = n_soort_oever)) +
+  geom_text(aes(x = pakket3, y=max(anlbhybi$n_soort_oever, na.rm = TRUE), label = n_obs))+
+  facet_wrap(watertype~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Aantal unieke oeversoorten") +
+    labs(x="",y="n")
+
+ggplot(data = anlbhybi[parameterid == "PTN_LENGTFTE_%"  
+                               & parameter == "EMSPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=100, label = n_obs))+
+  facet_wrap(watertype~.)+
+    theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Sluitingspercentage emers") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+ggplot(data = anlbhybi[parameterid == "PTN_BREEDTE_m"  
+                               & parameter == "EMSPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=max(anlbhybi[parameterid == "PTN_BREEDTE_m"  
+                               & parameter == "EMSPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8'),'meetwaarde']+0.1), label = n_obs))+
+  facet_wrap(watertype~.)+
+    theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Breedte emers") +
+    labs(x="",y="m")
+
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%"  
+                               & parameter == "OEVPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=100, label = n_obs))+
+  facet_wrap(watertype~.)+
+   theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking oeverplanten boven de waterlijn") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+ggplot(data = anlbhybi[parameterid == "PTN_LENGTFTE_%"  
+                               & parameter == "OEVPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=100, label = n_obs))+
+  facet_wrap(watertype~.)+
+   theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Sluitingspercentage oeverplanten") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+
+ggplot(data = anlbhybi[parameterid == "PTN_BEDKG_%"  
+                               & parameter == "SUBMSPTN" 
+                               & watertype %in%
+                          c('M10','M1a','M8')])+
+  geom_boxplot(aes(x = pakket3, y = meetwaarde)) +
+  geom_text(aes(x = pakket3, y=100, label = n_obs))+
+  facet_wrap(watertype~.)+
+   theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking submerse planten") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+ggplot()+
+  geom_boxplot(data = anlbhybi[ parameterid == "TALBVWTR_graad"  ], aes(x = pakket3, y = meetwaarde))#+ ylim(0,15)
+
+ggplot()+
+  geom_boxplot(data = anlbhybi[parameterid == "WATDTE_m" &
+                              watertype %in% c('M10','M1a','M8')],                aes(x = pakket3, y = meetwaarde))+ ylim(0,1)
+```
+
+```{r overview skenjesloot}
+skenjesloot <- merge(skenjesloot,skenjeslootloc, by = c('externereferentie','jaar'), suffixes = c('','_loc'), all.x = TRUE)
+
+# overzichttabel obv csv bestanden
+ov_sjs <- dcast(skenjesloot, parameterid+naam+`vraag sken je sloot`+parameter+parameterfractie+eenheid~jaar)
+fwrite(ov_sjs, file= paste0('skenjesloot_pars.csv'), sep = ';', dec ='.', )
+
+# figuur metingen per pakket per jaar (csv) --------------
+ggplot(data = skenjesloot[grepl('^BEHPK', parameterid),])+
+  geom_bar(aes(x = naam, fill = as.factor(meetwaarde)), 
+           position = 'stack') +
+  coord_flip()+
+  facet_wrap(~jaar)+
+  scale_fill_discrete(labels = c('afwezig','aanwezig','onbekend'))+
+  guides(fill=guide_legend(title=''))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Beheerpakketten in (s)Ken je sloot") +
+    labs(x="",y="aantal opnamen")
+
+# figuur n pakket per jaar (csv) --------------
+# & Code %in% c('2501-EAG-1','2501-EAG-2','2505-EAG-1','2502-EAG-1','2510-EAG-1'
+ggplot(data = npakket)+
+  geom_bar(aes(x = jaar, fill = as.factor(V1)), 
+           position = 'stack') +
+  # coord_flip()+
+  scale_fill_discrete(labels = c('geen anlb','1 pakket','2 pakketten','3 pakketten','4 pakketten','5 pakketten','6 pakketten','7 pakketten'))+
+  guides(fill=guide_legend(title=''))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Beheerpakketten in (s)Ken je sloot") +
+    labs(x="",y="aantal opnamen")
+
+
+# create table with beheer---------------
+sjs_beheer <- unique(skenjesloot[(grepl('^BEHPK', parameterid) | parameterid == 'BEHRPKNVO_SOORT') & meetwaarde == 1 , c('externereferentie','jaar','pakket_agg')])
+# afrastering
+sjs_beheer_2 <- unique(skenjesloot[parameterid=='OEVBSIG_SOORT'& meetwaarde %in% c(53,59,56,57),c('externereferentie','jaar','pakket_agg')])
+sjs_beheer_2[,pakket_agg:='afrastering']
+#samenvoegen
+sjs_beheer <-rbind(sjs_beheer,sjs_beheer_2)
+# format
+sjs_beheer <- dcast(sjs_beheer, externereferentie+jaar~pakket_agg)
+# PERODSLSSNG_mnd en 	PERODSLSBGODHD_a
+sjs_beheer_3 <- dcast(skenjesloot[parameterid%in%c('PERODSLSSNG_mnd','PERODSLSBGODHD_a'),],externereferentie+jaar~parameterid, value.var = 'meetwaarde', fun.aggregate = mean)
+sjs_beheer <- merge(sjs_beheer,sjs_beheer_3, by = c('externereferentie','jaar'))
+
+# add 1 type beheer combi
+sjs_beheer[,beheer := paste0(afrastering,'_',baggeren,'_',schonen,'_',nvo), by = externereferentie]
+sjs_beheer[,beheer:= gsub('_NA','',beheer)]
+sjs_beheer[,beheer:= gsub('NA_','',beheer)]
+sjs_beheer[is.na(beheer)|beheer =='NA'& is.na(rand) & is.na(water), beheer:= 'regulier']
+sjs_beheer[is.na(beheer)|beheer =='NA', beheer:= 'overig']
+
+ss_beheer <- merge(skenjesloot, sjs_beheer, by =c('externereferentie','jaar'), suffixes = c('','_beheer'), all.x = TRUE)
+ss_beheer[is.na(beheer)|beheer =='NA',beheer:= 'regulier']
+
+checknobs <- dcast(ss_beheer, value.var = 'externereferentie', fun.aggregate = uniqueN,jaar~beheer)
+
+checknobs <- ss_beheer[,uniqueN(externereferentie),by =c('jaar','beheer' )]
+fwrite(checknobs, file= paste0('skenjesloot_npakket.csv'), sep = ';', dec ='.', )
+# figuur welke pakket per jaar (csv) --------------
+ggplot(data = checknobs)+
+  geom_col(aes(x = jaar, y = V1, fill = as.factor(beheer)), 
+           position = 'dodge') +                            guides(fill=guide_legend(title='Type beheer'))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Beheerpakketten in (s)Ken je sloot") +
+    labs(x="",y="aantal opnamen")
+
+
+
+ss_beheer[,welnietbeheer:= 'ja']
+ss_beheer[beheer%in% c('regulier','overig'),welnietbeheer:= 'nee']
+## bedekking emers-------------
+ss_beheer[,n_obs:=uniqueN(externereferentie),by =c('parameter','jaar','beheer')]
+ggplot(data = ss_beheer[parameterid == 'PTN_BEDKG_%'&
+                          parameter =='EMSPTN',])+
+  geom_boxplot(aes(x = beheer, y = as.numeric(meetwaarde), fill = welnietbeheer)) +
+  geom_text(aes(x = beheer, y=110, label = n_obs), size = 2)+
+  guides(fill=guide_legend(title='Aangepast beheer?'))+
+  facet_wrap(jaar~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 90, hjust = 1, vjust = 0),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking emers") +
+    labs(x="",y="%")+
+  ylim(0,115)
+
+# emerse bedekking by eag
+ss_beheer[,welnietbeheer:= 'ja']
+ss_beheer[beheer%in% c('regulier','overig'),welnietbeheer:= 'nee']
+ss_beheer_cast <- dcast(ss_beheer[parameterid == 'PTN_BEDKG_%' & parameter =='EMSPTN',], Code+jaar~welnietbeheer, value.var = 'meetwaarde', fun.aggregate = mean)
+
+ggplot(data = ss_beheer_cast)+
+  geom_jitter(aes(x = nee, y = ja)) +
+  facet_wrap(jaar~.)+
+  geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking emers") +
+    labs(x="geen beheerpakket (%)",y="beheerpakket baggeren en/of schonen (%)")
+
+## submers-------------
+# add N obs
+ss_beheer[PERODSLSBGODHD_a > 2 & is.na(PERODSLSBGODHD_a) ,n_obs:=uniqueN(externereferentie),by =c('parameter','jaar','beheer' )]
+
+ggplot(data = ss_beheer[parameter == 'SUBMSPTN',])+
+  geom_boxplot(aes(x = beheer, y = as.numeric(meetwaarde),
+                   fill = welnietbeheer)) +
+  geom_text(aes(x = beheer, y=110, label = n_obs), 
+            size = 2)+
+  guides(fill=guide_legend(title='Aangepast beheer?'))+
+  facet_wrap(jaar~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 90, 
+                                 hjust = 1, vjust = 0),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking submers") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+ss_beheer[,n_obs:=uniqueN(externereferentie),by =c('parameter','baggeren','PERODSLSBGODHD_a' )]
+
+ggplot(data = ss_beheer[parameter == 'SUBMSPTN' ,])+
+  geom_boxplot(aes(x = as.factor(PERODSLSBGODHD_a),
+                   y = as.numeric(meetwaarde),
+                   fill = welnietbeheer)) +
+  geom_text(aes(x = as.factor(PERODSLSBGODHD_a),
+                y=110, label = n_obs), size = 2)+
+  guides(fill=guide_legend(title='Aangepast beheer?'))+
+  facet_wrap(.~baggeren)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking submers") +
+    labs(x="",y="%")
+# kroos per pakket--------------
+ss_beheer[,n_obs:=uniqueN(externereferentie),by =c('parameterid','parameter','jaar','beheer' )]
+ggplot(data = ss_beheer[parameter == 'KROOS',])+
+  geom_boxplot(aes(x = beheer, y = as.numeric(meetwaarde),
+                   fill = welnietbeheer)) +
+  geom_text(aes(x = beheer, y=110, label = n_obs), 
+            size = 2)+
+  guides(fill=guide_legend(title='Aangepast beheer?'))+
+  facet_wrap(jaar~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 90, 
+                                 hjust = 1, vjust = 0),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking kroos") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+# baggerfrequentie ---------
+ss_beheer[,n_obs:=uniqueN(externereferentie),by =c('parameter','baggeren','PERODSLSBGODHD_a' )]
+
+ggplot(data = ss_beheer[parameterid == 'BAGGEREN5JAAR' ,])+
+  geom_boxplot(aes(x = as.factor(PERODSLSBGODHD_a), y = as.numeric(meetwaarde))) +
+  geom_text(aes(x = as.factor(PERODSLSBGODHD_a), y=0, label = n_obs))+
+  facet_wrap(.~baggeren)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Frequentie baggeren") +
+    labs(x="",y="%")
+# ylim(0,15)
+
+# submerse bedekking by eag--------------------------
+ss_beheer_cast <- dcast(ss_beheer[parameterid == 'PTN_BEDKG_%' & parameter =='SUBMSPTN',], Code+jaar~welnietbeheer, value.var = 'meetwaarde', fun.aggregate = mean)
+
+ggplot(data = ss_beheer_cast)+
+  geom_jitter(aes(x = nee, y = ja)) +
+  facet_wrap(jaar~.)+
+  geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking submers") +
+    labs(x="geen beheerpakket (%)",y="beheerpakket baggeren en/of schonen (%)")
+
+# kroos bedekking by eag---------------
+ss_beheer_cast <- dcast(ss_beheer[parameterid == 'PTN_BEDKG_%' & parameter =='KROOS',], Code+jaar~welnietbeheer, value.var = 'meetwaarde', fun.aggregate = mean)
+
+ggplot(data = ss_beheer_cast)+
+  geom_jitter(aes(x = nee, y = ja)) +
+  facet_wrap(jaar~.)+
+  geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking kroos") +
+    labs(x="geen beheerpakket (%)",y="beheerpakket baggeren en/of schonen (%)")
+```
+
+# NOT USED (old/ backup)
+
+## Import data not used
+
+-   geodatabase not complete
+
+```{r data geodatabase}
+# Load sken je sloot------------
+layer_list <- st_layers(paste0(workspace,'./Sken je sloot.gdb'))
+layer_list <- unique(layer_list$name)
+ss_2017 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[1])
+ss_2018 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[3])
+ss_2019 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[5])
+ss_2020 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[7])
+ss_2021 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[9])
+ss_2022 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[11])
+ss_2023 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[13])
+ss_2024 <- st_read(paste0(workspace,'./Sken je sloot.gdb'), layer = layer_list[15])
+
+# combine---------------------
+ss <- list(ss_2017,ss_2018,ss_2019,ss_2020,ss_2021,ss_2022,ss_2023,ss_2024)
+ss <- rbindlist(ss, fill = T, use.names = T)
+setDT(ss)
+ss[,datum := as.Date(datum)]
+ss[,jaar := year(datum)]
+ss[globalid %in% ss_2017$globalid, jaar := 2017]
+ss[globalid %in% ss_2019$globalid, jaar := 2019]
+
+# reformat------------------------
+ss2<- melt(ss, id.vars = c('globalid','datum','tijd','jaar','Shape'))
+ss2 <- ss2[!is.na(value),]
+ov_ss2 <- dcast(ss2, variable~jaar, value.var = 'value', fun.aggregate = length)
+fwrite(ov_ss2, file= paste0('skenjesloot_pars.csv'), sep = ';', dec ='.', )
+
+# filter set for unique locations (sloten), unique not possible with sf data -----------------------------
+ssloc <- ss2[variable == 'blnDoorzicht',]
+ssloc <- st_as_sf(ssloc, crs = 4326) %>% st_transform(28992)
+ssloc <- st_join(ssloc, st_buffer(brpagv[!(brpagv$category == 'Landschapselement'),], dist = 5), left = TRUE, largest = TRUE)
+check<- unique(ssloc[is.na(ssloc$ref_id),c('globalid','Shape','jaar.x')])
+setDT(ssloc)
+ssloc[,jaar_sjs := jaar.x] 
+ssloc[,jaar.x:=NULL];ssloc[,jaar.y:=NULL]
+
+# combine locations
+ssloc[,brp_nr := rep(seq_len(.N), each = 1, length.out = .N), by = c('ref_id')]
+# ssloc <- st_as_sf(ssloc)
+ssloc[,dist := st_distance(Shape[brp_nr == 1], Shape), by ='ref_id'] 
+ssloc[,id := globalid]
+ssloc[,dist := as.numeric(dist)]
+sslocmatch <- ssloc[brp_nr == 1,]
+ssloc <- merge(ssloc, sslocmatch[,c('globalid','ref_id', 'jaar_sjs')], by = 'ref_id', suffixes = c('','_match'), all.x = TRUE, all.y = FALSE)
+# combine locs within 100 meter on same brp gewasperceel in verschillende jaren (soms zijn het wel andere sloten)
+ssloc[dist < 100 & !(jaar_sjs == jaar_sjs_match), id := globalid_match]
+ssloc <- st_as_sf(ssloc)
+st_write(ssloc, 'ssloc.gpkg')
+```
+
+-   fews format not complete
+
+```{r import skenjesloot fews format}
+skenjesloot <- list.files(path= paste0(workspace,'./skenjesloot_fewsformat/'), pattern=".csv", full.names =  T)
+skenjesloot <- lapply(skenjesloot, fread, sep=';')
+skenjesloot <- rbindlist(skenjesloot, fill =T, use.names = T)
+# unique(skenjesloot$datum)
+skenjesloot[,datum := as.Date(datum, format = "%d-%m-%Y")]
+skenjesloot[,jaar := year(datum)]
+skenjesloot[,maand := month(datum)]
+skenjesloot[,meetwaarde := as.numeric(meetwaarde)]
+skenjesloot[,c('xcoormonster','ycoormonster')  := list(as.integer(xcoormonster),as.integer(ycoormonster))]
+parameter <- data.table::fread('../WaterEcoInzicht/input/20250603/parameterid.csv', fill = TRUE)
+skenjesloot <- merge(skenjesloot, parameter[,c("code","naam", 'grootheid',"categorie","H_min", "H_max")], by.x = 'parameterid', by.y = 'code', suffixes = c('','_parameter'), all.x = TRUE)
+
+```
+
+-   selection agrarisch not by area but only data in same EAG's as anlb are used for analysis
+
+```{r agrarische EAG sel}
+# bereken agrarisch oppervlak per EAG
+brpagv$agropp <- as.numeric(st_area(brpagv))
+brpagv <- brpagv %>% as.data.table()
+brpagv <- brpagv[,agropptot := sum(as.numeric(agropp)), by = c('Code','category')]
+brpagv_agg <- unique(brpagv[,c('Code','category','agropptot')])
+brpagv_agg <- dcast(brpagv_agg,Code~category, value.var = 'agropptot', fill = 0)
+
+EAG <- merge(EAG, brpagv_agg, by = 'Code', all.x = TRUE)
+setDT(EAG)
+EAG[,OppLand:= as.numeric(Land_m2)]
+EAG[,Relagr := (Bouwland+Grasland)/ OppLand]
+EAG[Relagr > 0.5, gebiedstype := 'agrarisch']
+EAG[is.na(gebiedstype), gebiedstype := 'overig']
+st_write(EAG,'eag_gebiedstypeagrarisch.gpkg', append =FALSE)
+
+```
+
+## data verwerking not used
+
+```{r anlb 2024 overzicht}
+# overzicht 2024 ------------
+anlb2024 <- merge(anlb2024[,-c('pakket2','pakket3')], anlb_cat, by = 'pakket', all.x = TRUE)
+anlb2024 <- anlb2024[pakket2 == 'water',]
+anlb2024 <- st_as_sf(anlb2024)
+anlb2024 <- st_join(anlb2024, EAG, left = TRUE, largest = TRUE)
+setDT(anlb2024)
+write.table(anlb2024[,-'geom'],file ='anlb2024.csv',sep =';',dec='.', row.names = FALSE)
+wat_agv_24 <- anlb2024[!is.na(Code) & pakket2 == 'water', sum(as.numeric(opp)), by = c('collectief')]
+```
+
+## visualisatie not used
+
+```{r data exploration sjs}
+# create table with beheer---------------
+sjs_beheer <- ss2[grepl('^BEHPK', variable),]
+ss2_beheer <- merge(ss2, sjs_beheer, by =c('globalid','jaar'),allow.cartesian = T, suffixes = c('','_beheer'))
+ss2_beheer[value_beheer == 0, variable_beheer := "regulier beheer"]
+id_beheer <- ss2_beheer[value_beheer == 1, globalid]
+ss2_beheer <- ss2_beheer[!(variable_beheer == "regulier beheer" & globalid %in% id_beheer), ]
+
+# add N obs
+ss2_beheer[,n_obs:=uniqueN(globalid),by =c('variable','variable_beheer','jaar')]
+
+# figuur metingen per pakket per jaar (geodb) --------------
+ggplot(data = ss2[grepl('^BEHPK', variable),])+
+  geom_bar(aes(x = variable, fill = as.factor(value)), 
+           position = 'stack') +
+  coord_flip()+
+  facet_wrap(~jaar)+
+  scale_fill_discrete(labels = c('onbekend','afwezig','aanwezig'))+
+  guides(fill=guide_legend(title=''))+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 8, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Beheerpakketten in (s)Ken je sloot") +
+    labs(x="",y="aantal opnamen")
+
+## bedekking emers-------------
+ggplot(data = ss2_beheer[variable == 'EMSPTN',])+
+  geom_boxplot(aes(x = variable_beheer, y = as.numeric(value))) +
+  geom_text(aes(x = variable_beheer, y=0, label = n_obs))+
+  facet_wrap(jaar~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking emers") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+## submers-------------
+ggplot(data = ss2_beheer[variable == 'SUBMSPTN',])+
+  geom_boxplot(aes(x = variable_beheer, y = as.numeric(value))) +
+  geom_text(aes(x = variable_beheer, y=0, label = n_obs))+
+  facet_wrap(jaar~.)+
+  theme(
+      strip.background = element_blank(),
+      title = element_text(size= 10),
+      axis.text.x = element_text(size= 10, angle = 45, hjust =1),
+      axis.text.y = element_text(size= 10),
+      axis.ticks =  element_line(colour = "black"),
+      axis.line = element_line(colour='black'),
+      plot.background = element_blank(),
+      axis.title=element_text(size=10))+
+    ggtitle( "Bedekking submers") +
+    labs(x="",y="%")
+  # ylim(0,15)
+
+```
