@@ -1,0 +1,3 @@
+benchmark,fraction_validation,fraction_test,splits_predefined,splits_training,splits_validation,splits_test,remarks
+1,0.1,0.15,0,1271,169,255,
+2,0.1,0.15,0,1271,169,255,
