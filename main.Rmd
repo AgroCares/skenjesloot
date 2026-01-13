@@ -7,8 +7,6 @@ output: html_document
 
 ## Setup
 
-## Setup
-
 ```{r setup, include=FALSE}
 #| label: setup
 knitr::opts_chunk$set(echo = TRUE)
@@ -23,6 +21,9 @@ library(gridExtra)
 library(vip)
 library(xgboost)
 library(pdp)
+# Install corrplot if you don't have it
+if (!require(corrplot)) install.packages("corrplot")
+library(corrplot)
 
 # Later weer inladen
 load("anlb_project.RData")
@@ -145,6 +146,7 @@ pvskp <- fread('input/PvskP.csv')
 # # setDT(anlb)
 # # anlb[, jaar:= jaar.x];anlb[,jaar.x:=NULL];anlb[,jaar.y:=NULL]
 # # anlb <- st_as_sf(anlb)
+
 # st_write(anlb,'anlb_merged.gpkg', append = FALSE)
 
 ```
@@ -152,6 +154,9 @@ pvskp <- fread('input/PvskP.csv')
 ```{r load anlb}
 #| label:  load merged object
 anlb <- st_read('anlb_merged.gpkg')
+#merge with EAG
+anlb <- st_join(anlb, EAG[,c('EAGIDENT','geom','')], left = TRUE, largest = TRUE)
+
 ```
 
 ```{r import hybi}
@@ -211,19 +216,23 @@ baggernut <- calc_watbod(bodchem)
 ```{r import skenjesloot}
 #| label: import skenjesloot
 skenjesloot <- list.files(path= paste0(workspace,'./skenjesloot/'), pattern=".csv", full.names =  T)
-classes <- sapply(fread(skenjesloot[8L], sep=';'), class)
-skenjesloot <- lapply(skenjesloot, fread, sep=';', colClasses = unlist(classes))
+classes <- sapply(fread(skenjesloot[8L], sep=','), class)
+skenjesloot <- lapply(skenjesloot, fread, sep=',', colClasses = unlist(classes))
 skenjesloot <- rbindlist(skenjesloot, fill =T, use.names = T)
 # unique(skenjesloot$datum)
-skenjesloot[,datum := as.Date(datum, format = "%Y-%m-%d")]
+# skenjesloot[,datum := as.Date(datum, format = "%Y-%m-%d")]
+skenjesloot[,datum := as.Date(datum, format = "%d-%m-%Y")]
 skenjesloot[,jaar := year(datum)]
 skenjesloot[,maand := month(datum)]
 skenjesloot[,c('xcoormonster','ycoormonster')  := list(as.integer(xcoormonster),as.integer(ycoormonster))]
 
+ov_sjs <- dcast(skenjesloot, parameterid+parameter+parameterfractie+eenheid+eenheidreferentie~jaar)
+
 # correct parcodes -----------
-skenjesloot[parameterid == 'PTN_BEDKG', parameterid := 'PTN_AANWZHD']
-skenjesloot[parameterid == 'PTN_AANWZHD', parameter := 'PTN_BEDKG']
-skenjesloot[parameterid == 'PERODSLSSNG_mnd', eenheid := 'mnd']
+# skenjesloot[parameterid == 'PTN_BEDKG', parameterid := 'PTN_AANWZHD']
+# skenjesloot[parameterid == 'PTN_AANWZHD', parameter := 'PTN_BEDKG']
+# skenjesloot[parameterid == 'PERODSLSSNG_mnd', eenheid := 'mnd']
+skenjesloot[parameterid == 'RIVIERKREEFTENLAND', parameter := 'Astacoidea_AANWZHD'] 
 skenjesloot[meetwaarde == 99, meetwaarde := NA]
 
 # enumeratievelden toevoegen ------------------
@@ -262,16 +271,18 @@ skenjesloot[parameterid == 'TYPESLSSNG' & meetwaarde == 'nvt', meetwaarde := 7]
 sjs_foto <- skenjesloot[parameterid %in% c('FOTONR','FOTO_n'),]
 skenjesloot <- skenjesloot[!(parameterid %in% c('FOTONR','FOTO_n')),]
 # replace puntkomma
-skenjesloot[,meetwaarde := gsub(',','.',meetwaarde)]
+# skenjesloot[,meetwaarde := gsub(',','.',meetwaarde)]
 skenjesloot[,meetwaarde := as.numeric(meetwaarde)]
 # correct diepte, doorzicht in 2023 en 2024
-skenjesloot[parameterid %in% c("WATDTE_m", "SLIBDTE_m","ZICHT_m") & jaar %in% c(2023,2024), meetwaarde := meetwaarde/100]
+skenjesloot[parameterid %in% c("WATDTE_m", "SLIBDTE_m","ZICHT_m") & jaar %in% c(2020,2021,2022,2023,2024), meetwaarde := meetwaarde/100]
+skenjesloot[parameterid %in% c("WATDTE_m", "SLIBDTE_m","ZICHT_m") & meetwaarde > 3, meetwaarde := meetwaarde/100]
 
 # add par info -------------------
 parameter <- data.table::fread(paste0(workspace,'./parameterid.csv'), fill = TRUE)
 skenjesloot <- merge(skenjesloot, parameter[,c("code","naam",'pakket_agg','vraag sken je sloot', 'grootheid',"categorie","H_min", "H_max")], by.x = 'parameterid', by.y = 'code', suffixes = c('','_parameter'), all.x = TRUE)
-
 skenjesloot <- skenjesloot[!parameterid == '',]
+
+# check <- merge(parameter, unique(skenjesloot[,c('parameterid','parameter','parameterfractie','eenheid')]), by.x = 'code', by.y = 'parameterid', all.x = TRUE)
 
 ```
 
@@ -511,7 +522,7 @@ anlbhybi_bod <- merge(anlbhybi_bod, pvskp, by.x = 'GAFIDENT', by.y = 'GAFIDENT',
 
 ```{r sjs data npakket}
 #| label:  dat ppr skenjesloot
-#| add aantal paketten
+# add aantal paketten
 npakket <- skenjesloot[,sum(meetwaarde[grepl('^BEHPK', parameterid) | parameterid == 'BEHRPKNVO_SOORT'], na.rm = TRUE), by = c('monsterident','externereferentie','jaar')]
 npakket[,parameterid := 'BEHP_AANWZG']
 npakket[,parameter := 'pktaanwez']
@@ -521,6 +532,7 @@ skenjesloot <- rbindlist(list(skenjesloot,npakket), fill = TRUE)
 ```
 
 ```{r sjsloc aggregeren}
+
 #| label: locaties aggregeren binnen een afstand van 150 meter op zelfde 1.5 meter gebufferde perceel 
 skenjeslootloc <- unique(skenjesloot[,c("externereferentie","jaar","xcoormonster","ycoormonster")])
 skenjeslootloc[,ident:= paste0(xcoormonster,"_",ycoormonster)]
@@ -537,6 +549,7 @@ skenjeslootloc <- merge(skenjeslootloc, sslocmatch[,c('externereferentie','ref_i
 # combine locs within 100 meter on same brp gewasperceel in verschillende jaren (soms zijn het wel andere sloten)
 skenjeslootloc[, id := externereferentie]
 skenjeslootloc[dist < 150 & !(jaar == jaar_match), id := externereferentie_match]
+
 ```
 
 ```{r sjs loc join eag}
@@ -1384,8 +1397,8 @@ ss_beheer_cast <- merge(ss_beheer_cast, ss_beheer_cast_2[, .(Code, jaar, watbte_
 
 
 ggplot(data = ss_beheer_cast)+
-  geom_jitter(aes(x = nietbaggeren , y = baggeren, col = watbte_dif)) +
-  scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
+  geom_jitter(aes(x = nietbaggeren , y = baggeren)) +
+  # scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
   facet_wrap(jaar~.)+
   geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
   theme(
@@ -1415,8 +1428,8 @@ ss_beheer_cast <- ss_beheer_cast[, schonen := `schonen_NA`]
 ss_beheer_cast <- merge(ss_beheer_cast, ss_beheer_cast_2[, .(Code, jaar, watbte_dif)], by = c('Code', 'jaar'))
 
 ggplot(data = ss_beheer_cast)+
-  geom_jitter(aes(x = nietschonen , y = schonen, col = watbte_dif)) +
-  scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
+  geom_jitter(aes(x = nietschonen , y = schonen)) +
+  # scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
   facet_wrap(jaar~.)+
   geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
   theme(
@@ -1551,8 +1564,8 @@ ss_beheer_cast <- ss_beheer_cast[, schonen := `schonen_NA`]
 ss_beheer_cast <- merge(ss_beheer_cast, ss_beheer_cast_2[, .(Code, jaar, watbte_dif)], by = c('Code', 'jaar'))
 
 ggplot(data = ss_beheer_cast)+
-  geom_jitter(aes(x = nietschonen , y = schonen, col = watbte_dif)) +
-  scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
+  geom_jitter(aes(x = nietschonen , y = schonen)) +
+  # scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
   facet_wrap(jaar~.)+
   geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
   theme(
@@ -1564,8 +1577,8 @@ ggplot(data = ss_beheer_cast)+
       axis.line = element_line(colour='black'),
       plot.background = element_blank(),
       axis.title=element_text(size=12))+
-    ggtitle( "Bedekking submers") +
-    labs(x="geen beheerpakket (%)",y="beheerpakket baggeren en/of schonen (%)")
+    ggtitle( "Bedekking submers - beheerpakket ecologisch slootschonen") +
+    labs(x="geen beheerpakket (%)",y="beheerpakket schonen (%)")
 ```
 
 ```{r}
@@ -1581,8 +1594,8 @@ ss_beheer_cast <- merge(ss_beheer_cast, ss_beheer_cast_2[, .(Code, jaar, watbte_
 
 
 ggplot(data = ss_beheer_cast)+
-  geom_jitter(aes(x = nietbaggeren , y = baggeren, col = watbte_dif)) +
-  scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
+  geom_jitter(aes(x = nietbaggeren , y = baggeren)) +
+  # scale_color_binned(type = 'viridis', name = 'Verschil waterbreedte (m)')+
   facet_wrap(jaar~.)+
   geom_abline (slope=1, linetype= "dashed", color="Black", linewidth=0.5) +
   theme(
@@ -1601,7 +1614,7 @@ ggplot(data = ss_beheer_cast)+
 ```{r submers vs doorzicht}
 #| label: submers vs doorzicht
 ss_cast <- dcast(ss_beheer, externereferentie+id+jaar+welnietbeheer~parameterid+parameter+parameterfractie, fun.aggregate = mean, value.var = 'meetwaarde')
-ss_cast[`PTN_BEDKG_%_SUBMSPTN_` > `PTN_BEDKG_%_FLAB_SUBMS`, `PTN_BEDKG_%_SUBMSPTN_`:= `PTN_BEDKG_%_SUBMSPTN_`-`PTN_BEDKG_%_FLAB_SUBMS`]
+ss_cast[`PTN_BEDKG_%_SUBMSPTN_` > `PTN_BEDKG_%_DRAADALG_SUBMS`, `PTN_BEDKG_%_SUBMSPTN_`:= `PTN_BEDKG_%_SUBMSPTN_`-`PTN_BEDKG_%_DRAADALG_SUBMS`]
 ss_cast[,zichtdte := ZICHT_m_ZICHT_/ WATDTE_m_WATDTE_]
 
 palette <- palette.colors(palette = "Okabe-Ito", n = unique(ss_cast$jaar))
@@ -1631,7 +1644,7 @@ Submerse vegetatie bedekking heeft geen duidelijke relatie met de frequentie van
 ```{r submers vs waterdiepte}
 #| label: submers vs waterdiepte
 ss_cast <- dcast(ss_beheer, externereferentie+id+jaar+welnietbeheer~parameterid+parameter+parameterfractie, fun.aggregate = mean, value.var = 'meetwaarde')
-ss_cast[`PTN_BEDKG_%_SUBMSPTN_` > `PTN_BEDKG_%_FLAB_SUBMS`, `PTN_BEDKG_%_SUBMSPTN_`:= `PTN_BEDKG_%_SUBMSPTN_`-`PTN_BEDKG_%_FLAB_SUBMS`]
+ss_cast[`PTN_BEDKG_%_SUBMSPTN_` > `PTN_BEDKG_%_DRAADALG_SUBMS`, `PTN_BEDKG_%_SUBMSPTN_`:= `PTN_BEDKG_%_SUBMSPTN_`-`PTN_BEDKG_%_DRAADALG_SUBMS`]
 ss_cast[,zichtdte := ZICHT_m_ZICHT_/ WATDTE_m_WATDTE_]
 
 palette <- palette.colors(palette = "Okabe-Ito", n = unique(ss_cast$jaar))
@@ -1640,6 +1653,7 @@ ggplot(data = ss_cast[!is.na(`PTN_BEDKG_%_SUBMSPTN_`) & !is.na(ZICHT_m_ZICHT_) &
   geom_jitter(aes(x = WATDTE_m_WATDTE_, y = `PTN_BEDKG_%_SUBMSPTN_`, color = as.factor(jaar))) +
   geom_smooth(aes(x = WATDTE_m_WATDTE_, y = `PTN_BEDKG_%_SUBMSPTN_`), method = 'loess', color = 'black')+
   scale_color_manual(values = palette, name = 'Jaar')+
+  xlim(0,1.5)+
   # facet_wrap(welnietbeheer~.)+
   theme(
       strip.background = element_blank(),
@@ -1806,6 +1820,978 @@ ggplot()+
 
 
 ```
+
+## XG-boost analyse
+
+```{r xgboost setup }
+#| label: xgboost
+
+anlbhybi_cast <- anlbhybi_bod
+anlbhybi_cast[,pvskp := P_tot/Pkrit1] #3417 rows
+
+# Prepare data for xgboost using data.table syntax
+model_data_xgb <- anlbhybi_cast[
+  # Filter out rows with missing target variable
+  !is.na(`PTN_BEDKG_%_SUBMSPTN_`) 
+][
+  # Select relevant columns
+  , .(
+    # Target variable
+    submers_bedekking = `PTN_BEDKG_%_SUBMSPTN_`,
+    emers_bedekking = `PTN_BEDKG_%_EMSPTN_`,
+    submers_soorten = n_soort_sub,
+    emers_soorten = n_soort_ems,
+    
+    # Management features
+    anlb,
+    njaaranlb,
+    # beheer,
+    baggeren,
+    slootschonen,
+    water,
+    bufferzone,
+    pakket_n_anlb,
+    
+    # Environmental features
+    # watertype,
+    WATDTE_m_WATDTE_,
+    WATERBTE_m_WATERBTE_,
+    SLIBDTE_m_SLIBDTE_,
+    zichtdte,
+    TALBVWTR_graad_TALBVWTR_,
+    # rel_water,
+    A_P_AL,
+    A_SOM_LOI,
+    # Ptot_mgP_l_nf_PW,
+    # NH4_mgN_l_nf_PW,
+    P_tot,
+    `mm/d`,
+    pvskp,
+
+    # Other coverage variables
+    `PTN_BEDKG_%_FLAB_`,
+    `PTN_BEDKG_%_KROOS_`,
+    
+    # Location identifier
+    EAGIDENT,
+    locatie,
+    compartiment,
+    jaar
+  )
+] # 2938 rows
+
+# Remove rows with any missing values in a separate step
+# model_data_xgb[complete.cases(model_data_xgb), complete := 1]
+# setDT(hybiloc)
+# model_data_loc_check <- merge(model_data_xgb, hybiloc, by = "locatie", all.x = TRUE)
+# model_data_loc_check_hybi <- st_as_sf(model_data_loc_check)
+# st_write(model_data_loc_check, "model_data_loc_check.gpkg", delete_dsn = TRUE)
+model_data_xgb <- model_data_xgb[complete.cases(model_data_xgb),] 
+# 2900 = alles, 2774 = met watbal, 2499 = met bodemschat, 2382 = met bodemschat en watbal, 1435 inclusief waterbodem, belasting en bodschat
+
+# Convert factors to numeric for xgboost
+factor_cols <- names(model_data_xgb)[sapply(model_data_xgb, is.character)]
+model_data_xgb[, (factor_cols) := lapply(.SD, as.factor), .SDcols = factor_cols]
+model_data_xgb[, (factor_cols) := lapply(.SD, as.numeric), .SDcols = factor_cols]
+
+```
+
+
+```{r correlatie check}
+#| label: xgboost parameters check
+
+# Check correlation between features
+feature_cols <- setdiff(names(model_data_xgb), c("submers_bedekking", "emers_bedekking", "compartiment","submers_soorten", "emers_soorten",
+                                                  "PTN_BEDKG_%_FLAB_", "locatie", "EAGIDENT", "anlb"))
+cor_matrix <- model_data_xgb[, ..feature_cols]
+# Remove rows with NA values
+cor_matrix <- na.omit(cor_matrix)
+# Calculate correlation matrix
+cor_matrix <- cor(cor_matrix, use = "pairwise.complete.obs")
+
+# Create correlation plot
+corrplot(cor_matrix, 
+         method = "color",       # Color squares
+         type = "upper",         # Only show upper triangle
+         order = "hclust",       # Order by hierarchical clustering
+         tl.col = "black",       # Label color
+         tl.srt = 45,            # Label rotation
+         tl.cex = 0.7,           # Label size
+         addCoef.col = "black",  # Add correlation coefficients
+         number.cex = 0.6,       # Coefficient text size
+         col = colorRampPalette(c("#6D9EC1", "white", "#E46726"))(200)) # Blue-white-orange color scheme
+
+# Or alternatively, use ggcorrplot for a ggplot-based solution
+if (!require(ggcorrplot)) install.packages("ggcorrplot") 
+library(ggcorrplot)
+
+ggcorrplot(cor_matrix, 
+           hc.order = TRUE,      # Hierarchical clustering
+           type = "upper",       # Show only upper triangle
+           lab = TRUE,           # Add correlation coefficients
+           lab_size = 3,         # Size of text labels
+           tl.cex = 8,           # Text label size
+           title = "Correlation Plot of Environmental and Vegetation Variables",
+           ggtheme = ggplot2::theme_minimal())
+
+
+```
+
+
+```{r xgboost target loop}
+
+# Optie 1: Train afzonderlijke modellen voor elke doelvariabele
+target_variables <- c("submers_bedekking", "emers_bedekking", "submers_soorten", "emers_soorten")
+
+models <- list()
+predictions_all <- list()
+rsme_all <- list()
+
+for(target_var in target_variables) {
+  cat("Training model for:", target_var, "\n")
+  
+  # Selecteer target
+  target <- model_data_xgb[[target_var]]
+  
+  # Verwijder alle target variabelen uit features
+  features <- model_data_xgb[, !c("submers_bedekking", "emers_bedekking", 
+                                  "emers_soorten", "submers_soorten",
+                                  "PTN_BEDKG_%_FLAB_", "locatie", "EAGIDENT", "anlb")]
+  
+  # Train/test split (gebruik dezelfde split voor vergelijkbaarheid)
+  set.seed(123)
+  train_idx <- sample(nrow(features), 0.8 * nrow(features))
+  
+  train_x <- as.matrix(features[train_idx])
+  train_y <- target[train_idx]
+  test_x <- as.matrix(features[-train_idx])
+  test_y <- target[-train_idx]
+  
+  # Train model
+  dtrain <- xgb.DMatrix(data = train_x, label = train_y)
+  dtest <- xgb.DMatrix(data = test_x, label = test_y)
+  
+  xgb_model <- xgb.train(
+    params = params,
+    data = dtrain,
+    nrounds = 1000,
+    watchlist = list(train = dtrain, test = dtest),
+    early_stopping_rounds = 50,
+    verbose = 0
+  )
+  
+  # Bewaar model en predictions
+  models[[target_var]] <- xgb_model
+  predictions <- predict(xgb_model, dtest)
+  predictions_all[[target_var]] <- predictions
+  
+  # Calculate RMSE
+  rmse <- sqrt(mean((test_y - predictions)^2))
+  rsme_all[[target_var]] <- rmse
+  cat("RMSE voor", target_var, ":", round(rmse, 3), "\n\n")
+  
+  # Variable importance
+  print(paste("Variable importance voor", target_var))
+  print(vip(xgb_model, num_features = 10))
+}
+
+```
+
+
+```{r vip plots}
+#| label: Complete VIP Plot Creation for All Target Variables
+
+# Bereken de variatie/schaal van elke target variabele om RMSE als percentage uit te drukken
+calculate_rmse_percentage <- function(models, target_variables, data) {
+  rmse_percentages <- list()
+  
+  for (target_var in target_variables) {
+    # Haal de target waarden op
+    target_values <- data[[target_var]]
+    
+    # Bereken statistieken
+    target_range <- max(target_values, na.rm = TRUE) - min(target_values, na.rm = TRUE)
+    target_mean <- mean(target_values, na.rm = TRUE)
+    target_sd <- sd(target_values, na.rm = TRUE)
+    
+    # RMSE
+    rmse <- rsme_all[[target_var]]
+    
+    # Bereken percentages
+    rmse_pct_range <- (rmse / target_range) * 100  # Percentage van bereik
+    rmse_pct_mean <- (rmse / target_mean) * 100    # Percentage van gemiddelde
+    rmse_pct_sd <- (rmse / target_sd) * 100        # Percentage van standaarddeviatie
+    
+    # Sla resultaten op
+    rmse_percentages[[target_var]] <- list(
+      rmse = rmse,
+      range = target_range,
+      mean = target_mean,
+      sd = target_sd,
+      rmse_pct_range = rmse_pct_range,
+      rmse_pct_mean = rmse_pct_mean,
+      rmse_pct_sd = rmse_pct_sd
+    )
+    
+    # Print samenvatting
+    cat("Target:", target_var, "\n")
+    cat("  Range:", round(target_range, 2), "\n")
+    cat("  Mean:", round(target_mean, 2), "\n")
+    cat("  RMSE:", round(rmse, 3), "\n")
+    cat("  RMSE as % of range:", round(rmse_pct_range, 1), "%\n")
+    cat("  RMSE as % of mean:", round(rmse_pct_mean, 1), "%\n\n")
+  }
+  
+  return(rmse_percentages)
+}
+
+# Bereken RMSE percentages
+rmse_stats <- calculate_rmse_percentage(models, target_variables, model_data_xgb)
+
+# Aangepaste VIP functie met RMSE percentage
+create_multiple_vip_grids_with_pct <- function(models, target_variables, rmse_stats, num_features = 10) {
+  
+  # Target variable mapping for readable names
+  target_mapping <- list(
+    "submers_bedekking" = "Submerse Bedekking (%)",
+    "emers_bedekking" = "Emerse Bedekking (%)",
+    "submers_soorten" = "Submerse Soorten (aantal)",
+    "emers_soorten" = "Emerse Soorten (aantal)"
+  )
+  
+  # Variable mapping for readable names
+  var_mapping <- list(
+    "njaaranlb" = "Aantal jaren ANLB",
+    "beheer" = "Beheertype",
+    "baggeren" = "Baggeren",
+    "slootschonen" = "Slootschonen", 
+    "water" = "Water pakket",
+    "bufferzone" = "Bufferzone",
+    "pakket_n_anlb" = "Aantal ANLB pakketten",
+    "watertype" = "Watertype",
+    "WATDTE_m_WATDTE_" = "Waterdiepte (m)",
+    "WATERBTE_m_WATERBTE_" = "Waterbreedte (m)",
+    "SLIBDTE_m_SLIBDTE_" = "Slibdikte (m)",
+    "zichtdte" = "Zichtdiepte/Waterdiepte",
+    "rel_water" = "Fractie open water (%)",
+    "A_P_AL" = "P-AL (mg/kg)",
+    "A_SOM_LOI" = "Organische stof (%)",
+    "Ptot_mgP_l_nf_PW" = "P-totaal poriewater (mg/l)",
+    "NH4_mgN_l_nf_PW" = "NH4 poriewater (mg/l)",
+    "P_tot" = "P-belasting (mg/m2/dag)",
+    "mm/d" = "Verblijftijd (mm/dag)",
+    "PTN_BEDKG_%_FLAB_" = "Flabbedekking (%)",
+    "TALBVWTR_graad_TALBVWTR_" = "Taludhelling (graden)",
+    "PTN_BEDKG_%_KROOS_" = "Kroosbedekking (%)",
+    "compartiment" = "Compartiment",
+    "jaar" = "Jaar"
+  )
+  
+  # Store all VIP plots
+  vip_plots <- list()
+  
+  # Create VIP plot for each target variable
+  for (target_var in target_variables) {
+    cat("Creating VIP plot for target:", target_var, "\n")
+    
+    model <- models[[target_var]]
+    stats <- rmse_stats[[target_var]]
+    
+    # Get variable importance DATA
+    importance_data <- vip::vi(model)
+    
+    # Map variable names to readable names
+    importance_data$Variable_readable <- sapply(importance_data$Variable, function(x) {
+      if (x %in% names(var_mapping)) {
+        return(var_mapping[[x]])
+      } else {
+        return(x)
+      }
+    })
+    
+    # Create subtitle with RMSE and percentage
+    subtitle_text <- paste0(
+      "RMSE: ", round(stats$rmse, 3),
+      " (", round(stats$rmse_pct_range, 1), "% van bereik, ",
+      round(stats$rmse_pct_mean, 1), "% van gemiddelde)"
+    )
+    
+    # Create VIP plot with enhanced RMSE information
+    p <- ggplot(importance_data, aes(x = reorder(Variable_readable, Importance), 
+                                   y = Importance)) +
+      geom_col(fill = "steelblue", alpha = 0.8) +
+      coord_flip() +
+      labs(
+        title = paste("Variable Importance:", target_mapping[[target_var]]),
+        subtitle = subtitle_text,
+        x = "Variabelen",
+        y = "Importance (Gain)"
+      ) +
+      theme_minimal() +
+      theme(
+        plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 10, color = "darkred"),
+        axis.title = element_text(size = 12),
+        axis.text = element_text(size = 10),
+        axis.text.y = element_text(size = 9),
+        panel.grid.minor = element_blank()
+      )
+    
+    vip_plots[[target_var]] <- p
+    print(p)
+  }
+  
+  # Create combined grid plot
+  if (length(vip_plots) > 0) {
+    cat("Creating combined VIP grid...\n")
+    
+    combined_vip_grid <- gridExtra::grid.arrange(
+      grobs = vip_plots,
+      ncol = 2,
+      top = "Variable Importance Comparison - All Target Variables (RMSE with Context)"
+    )
+    
+    print(combined_vip_grid)
+  }
+  
+  return(vip_plots)
+}
+
+# Main execution
+# ==============
+vip_results_with_pct <- create_multiple_vip_grids_with_pct(
+  models = models,
+  target_variables = target_variables,
+  rmse_stats = rmse_stats,
+  num_features = 12
+)
+
+
+# Print summary
+cat("\n=== VIP ANALYSIS SAMENVATTING ===\n")
+cat("Aantal VIP plots gemaakt:", length(vip_results), "\n")
+cat("Target variabelen geanalyseerd:", paste(names(vip_results), collapse = ", "), "\n")
+cat("Grid layouts gemaakt: Overall, Bedekking, Soorten\n")
+
+
+```
+
+
+De waterbreedte is de belangrijkste voorspeller voor emerse bedekking. Daarnaast zijn de variabelen die het water beïnvloeden (doorzicht, waterdiepte, taludhoek) ook belangrijk. Beheer gerelateerde variabelen zoals aantal jaren anlb en baggeren zijn minder belangrijk.
+Ook bij sumberse vegetatie is de waterbreedte een belangrijke voorspeller. Daarnaast zijn de variabelen die het water beïnvloeden (doorzicht, waterdiepte, taludhoek) ook belangrijk. Beheer gerelateerde variabelen zoals aantal jaren anlb en baggeren zijn minder belangrijk.
+
+Waterdiepte en zichtdiepte zijn belangrijker bij het voorspellen van sumberse dan emerse bedekking.
+
+```{r ale plots}
+#| label: Complete ALE Plot Creation for All Target Variables
+# ===================================================
+
+# Define function to create ALE plots manually
+create_ale_plot <- function(model, data, feature, num_intervals = 40) {
+  # Sort the data by the feature
+  data_sorted <- data[order(data[, feature]), ]
+  x_sorted <- data_sorted[, feature]
+  
+  # Create intervals
+  n <- length(x_sorted)
+  interval_size <- max(1, floor(n / num_intervals))
+  intervals <- seq(1, n, by = interval_size)
+  if (intervals[length(intervals)] < n) intervals <- c(intervals, n)
+  
+  # Initialize results
+  ale_values <- numeric(length(intervals) - 1)
+  x_values <- numeric(length(intervals) - 1)
+  
+  # Calculate ALE for each interval
+  for (i in 1:(length(intervals) - 1)) {
+    start_idx <- intervals[i]
+    end_idx <- intervals[i+1]
+    
+    # Get data in this interval
+    x_interval <- x_sorted[start_idx:end_idx]
+    data_interval <- data_sorted[start_idx:end_idx, , drop = FALSE]
+    
+    # Calculate mean feature value for this interval
+    x_values[i] <- mean(x_interval)
+    
+    # Create two datasets: one with min value and one with max value
+    data_min <- data_interval
+    data_max <- data_interval
+    data_min[, feature] <- min(x_interval)
+    data_max[, feature] <- max(x_interval)
+    
+    # Predict with both datasets
+    pred_min <- predict(model, as.matrix(data_min))
+    pred_max <- predict(model, as.matrix(data_max))
+    
+    # Calculate average difference
+    ale_values[i] <- mean(pred_max - pred_min)
+  }
+  
+  # Cumulative sum to get ALE
+  ale_cumsum <- cumsum(ale_values)
+  
+  # Center ALE to have mean of 0
+  ale_cumsum <- ale_cumsum - mean(ale_cumsum)
+  
+  # Return results
+  return(data.frame(x = x_values, ale = ale_cumsum))
+}
+
+# Function to create ALE plots for all target variables
+create_ale_plots_all_targets <- function(models, train_data, target_variables) {
+  
+  # Define continuous variables for ALE plots
+  continuous_vars <- c(
+    "WATDTE_m_WATDTE_", "WATERBTE_m_WATERBTE_", "SLIBDTE_m_SLIBDTE_",
+    "zichtdte","A_P_AL","A_SOM_LOI","NH4_mgN_l_nf_PW","Ptot_mgP_l_nf_PW","P_tot","mm/d","TALBVWTR_graad_TALBVWTR_", "PTN_BEDKG_%_KROOS_", "jaar","pvskp" 
+  )
+  
+  # Variable mapping for readable names
+  var_mapping <- list(
+    "njaaranlb" = "Aantal jaren ANLB",
+    "beheer" = "Beheertype",
+    "baggeren" = "Baggeren",
+    "slootschonen" = "Slootschonen", 
+    "water" = "Water pakket",
+    "bufferzone" = "Bufferzone",
+    "pakket_n_anlb" = "Aantal ANLB pakketten",
+    "watertype" = "Watertype",
+    "WATDTE_m_WATDTE_" = "Waterdiepte (m)",
+    "WATERBTE_m_WATERBTE_" = "Waterbreedte (m)",
+    "SLIBDTE_m_SLIBDTE_" = "Slibdikte (m)",
+    "zichtdte" = "Zichtdiepte/Waterdiepte",
+    "rel_water" = "Fractie open water (%)",
+    "A_P_AL" = "P-AL (mg/kg)",
+    "A_SOM_LOI" = "Organische stof (%)",
+    "Ptot_mgP_l_nf_PW" = "P-totaal poriewater (mg/l)",
+    "NH4_mgN_l_nf_PW" = "NH4 poriewater (mg/l)",
+    "P_tot" = "P-belasting (mg/m2/dag)",
+    "mm/d" = "Verblijftijd (mm/dag)",
+    "PTN_BEDKG_%_FLAB_" = "Flabbedekking (%)",
+    "TALBVWTR_graad_TALBVWTR_" = "Taludhelling (graden)",
+    "PTN_BEDKG_%_KROOS_" = "Kroosbedekking (%)",
+    "compartiment" = "Compartiment",
+    "jaar" = "Jaar",
+    "pvskp" = "P belasting / Kritische P belasting"
+  )
+  
+  # Target variable mapping for readable names
+  target_mapping <- list(
+    "submers_bedekking" = "Submerse Bedekking (%)",
+    "emers_bedekking" = "Emerse Bedekking (%)",
+    "submers_soorten" = "Submerse Soorten (aantal)",
+    "emers_soorten" = "Emerse Soorten (aantal)"
+  )
+  
+  # Verify which variables exist in training data
+  valid_vars <- intersect(continuous_vars, colnames(train_data))
+  
+  # Store all ALE plots
+  all_ale_plots <- list()
+  
+  # Loop through each target variable
+  for (target_var in target_variables) {
+    cat("Creating ALE plots for target:", target_var, "\n")
+    
+    model <- models[[target_var]]
+    target_plots <- list()
+    
+    # Create ALE plots for each continuous variable
+    for (var in valid_vars) {
+      cat("  Creating ALE plot for:", var, "\n")
+      
+      # Calculate ALE values
+      ale_data <- create_ale_plot(model, train_data, var)
+      
+      # Add annotations for effect values
+      max_effect <- max(abs(ale_data$ale))
+      effect_points <- seq(1, nrow(ale_data), length.out = 5)
+      effect_points <- round(effect_points)
+      effect_points <- unique(effect_points)
+      
+      # Create plot with target-specific labeling
+      p <- ggplot(ale_data, aes(x = x, y = ale)) +
+        geom_line(linewidth = 1.2, color = "steelblue") +
+        geom_rug(sides = "b", alpha = 0.2) +
+        geom_point(data = ale_data[effect_points,], aes(x = x, y = ale), 
+                   color = "red", size = 2) +
+        geom_text(data = ale_data[effect_points,], 
+                  aes(x = x, y = ale, 
+                      label = sprintf("%.1f", ale)),
+                  vjust = -1.5, size = 3) +
+        labs(
+          title = paste("Effect van", var_mapping[[var]], "op", target_mapping[[target_var]]),
+          x = var_mapping[[var]],
+          y = paste("Effect op", target_mapping[[target_var]])
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 14, face = "bold"),
+          axis.title = element_text(size = 12),
+          axis.text = element_text(size = 10),
+          panel.grid.minor = element_blank()
+        )
+      
+      target_plots[[var]] <- p
+      print(p)
+    }
+    
+    # Store plots for this target
+    all_ale_plots[[target_var]] <- target_plots
+    
+    # Create combined plot grid for this target
+    if (length(target_plots) > 0) {
+      if (requireNamespace("gridExtra", quietly = TRUE)) {
+        grid_plot <- gridExtra::grid.arrange(
+          grobs = target_plots, 
+          ncol = 2,
+          top = paste("ALE Plots voor", target_mapping[[target_var]])
+        )
+        print(grid_plot)
+      }
+    }
+    
+    cat("\n")
+  }
+  
+  return(all_ale_plots)
+}
+
+# Function to create comparison plots across targets
+create_comparison_ale_plots <- function(all_ale_plots, var_to_compare) {
+  comparison_plots <- list()
+  
+  for (target in names(all_ale_plots)) {
+    if (var_to_compare %in% names(all_ale_plots[[target]])) {
+      plot <- all_ale_plots[[target]][[var_to_compare]] +
+        labs(title = paste(target, "-", var_to_compare)) +
+        theme(plot.title = element_text(size = 12))
+      
+      comparison_plots[[target]] <- plot
+    }
+  }
+  
+  if (length(comparison_plots) > 0) {
+    grid_plot <- gridExtra::grid.arrange(
+      grobs = comparison_plots,
+      ncol = 2,
+      top = paste("Vergelijking ALE plots voor", var_to_compare)
+    )
+    print(grid_plot)
+  }
+  
+  return(comparison_plots)
+}
+
+# Function to summarize ALE effects
+summarize_ale_effects <- function(all_ale_plots) {
+  cat("=== ALE PLOT SAMENVATTING ===\n\n")
+  
+  for (target in names(all_ale_plots)) {
+    cat("Target variabele:", target, "\n")
+    cat("Aantal ALE plots gemaakt:", length(all_ale_plots[[target]]), "\n")
+    cat("Variabelen geanalyseerd:", paste(names(all_ale_plots[[target]]), collapse = ", "), "\n")
+    cat("\n")
+  }
+}
+
+# Main execution
+# ==============
+
+# Define target variables
+target_variables <- c("submers_bedekking", "emers_bedekking", "submers_soorten", "emers_soorten")
+
+# Create ALE plots for all targets (assuming models and train_x are already available)
+all_ale_plots <- create_ale_plots_all_targets(
+  models = models,
+  train_data = as.data.frame(train_x),
+  target_variables = target_variables
+)
+
+# Create comparison plots for specific variables across all targets
+cat("Creating comparison plots...\n")
+
+# Example: Compare waterbreedte effects across all targets
+waterbreedte_comparison <- create_comparison_ale_plots(all_ale_plots, "WATERBTE_m_WATERBTE_")
+# Example: Compare waterdiepte effects across all targets  
+waterdiepte_comparison <- create_comparison_ale_plots(all_ale_plots, "WATDTE_m_WATDTE_")
+# Example: Compare kroos effects across all targets
+kroos_comparison <- create_comparison_ale_plots(all_ale_plots, "PTN_BEDKG_%_KROOS_")
+# Example: Compare P-AL effects across all targets
+p_al_comparison <- create_comparison_ale_plots(all_ale_plots, "A_P_AL")
+# Example: Compare P-totaal effects across all targets
+ptotaal_comparison <- create_comparison_ale_plots(all_ale_plots, "P_tot")
+# Example: Compare Taludhelling effects across all targets
+talud_comparison <- create_comparison_ale_plots(all_ale_plots, "TALBVWTR_graad_TALBVWTR_")
+# Example: Compare zichtdte effects across all targets
+zichtdte_comparison <- create_comparison_ale_plots(all_ale_plots, "zichtdte")
+# Example: Compare mm/d effects across all targets
+mm_d_comparison <- create_comparison_ale_plots(all_ale_plots, "mm/d")
+# Example: Compare NH4 effects across all targets
+nh4_comparison <- create_comparison_ale_plots(all_ale_plots, "NH4_mgN_l_nf_PW")
+#Example: Compare P-totaal poriewater effects across all targets
+ptotaal_pw_comparison <- create_comparison_ale_plots(all_ale_plots, "Ptot_mgP_l_nf_PW")
+# Example: Compare fractie water effects across all targets
+rel_water_comparison <- create_comparison_ale_plots(all_ale_plots, "rel_water")
+# Example: Compare organisch stof effects across all targets
+org_stof_comparison <- create_comparison_ale_plots(all_ale_plots, "A_SOM_LOI")
+# Example: Compare pvskp effects across all targets
+pvskp_comparison <- create_comparison_ale_plots(all_ale_plots, "pvskp")
+
+# Show summary of all ALE plots created
+summarize_ale_effects(all_ale_plots)
+
+cat("ALE plots creation completed for all target variables!\n")
+```
+
+```{r ale plots versie 2}
+
+create_ale_plots_top10_variables <- function(models, train_data, target_variables) {
+  
+  # Functie om top 10 variabelen te bepalen voor elk model
+  get_top10_variables <- function(model) {
+    # Bereken variabele-belangrijkheid
+    importance <- xgboost::xgb.importance(model = model)
+    
+    # Sorteer op belangrijkheid en neem top 10
+    top10 <- head(importance$Feature, 10)
+    return(top10)
+  }
+  
+  # Variabele mapping voor leesbare namen
+  var_mapping <- list(
+    "WATDTE_m_WATDTE_" = "Waterdiepte (m)",
+    "WATERBTE_m_WATERBTE_" = "Waterbreedte (m)", 
+    "SLIBDTE_m_SLIBDTE_" = "Slibdikte (m)",
+    "zichtdte" = "Zichtdiepte/Waterdiepte",
+    "TALBVWTR_graad_TALBVWTR_" = "Taludhelling (graden)",
+    "PTN_BEDKG_%_KROOS_" = "Kroosbedekking (%)",
+    "jaar" = "Jaar",
+    "pvskp" = "P belasting / Kritische P belasting",
+    "A_P_AL" = "P-AL bodem",
+    "P_tot" = "P-belasting (mg/m2/dag)",
+    "mm/d" = "Hydraulisch debiet (mm/dag)",	
+    "rel_water" = "Percentage open water",
+    "P_PO4" = "Fosfaat (PO4)",
+    "Ntot" = "Totaal stikstof",
+    "NH4" = "Ammonium",
+    "A_SOM_LOI" = "Organische stof (%)",
+    "njaaranlb" = "Aantal jaren ANLb",
+    "baggeren" = "Baggeren",
+    "slootschonen" = "Slootschonen",
+    "water" = "Water beheer",
+    "bufferzone" = "Bufferzone",
+    "pakket_n_anlb" = "Aantal ANLb pakketten"
+  )
+  
+  # Target variabele mapping voor leesbare namen
+  target_mapping <- list(
+    "submers_bedekking" = "Submerse Bedekking (%)",
+    "emers_bedekking" = "Emerse Bedekking (%)",
+    "submers_soorten" = "Submerse Soorten (aantal)",
+    "emers_soorten" = "Emerse Soorten (aantal)"
+  )
+  
+  # Sla alle ALE plots op
+  all_ale_plots <- list()
+  
+  # Loop door elke doelvariabele
+  for (target_var in target_variables) {
+    cat("ALE plots maken voor:", target_var, "\n")
+    
+    model <- models[[target_var]]
+    target_plots <- list()
+    
+    # Bepaal top 10 belangrijkste variabelen voor dit model
+    top10_vars <- get_top10_variables(model)
+    cat("Top 10 belangrijkste variabelen voor", target_var, ":", paste(top10_vars, collapse=", "), "\n")
+    
+    # Maak ALE plots voor elke top-10 variabele
+    for (var in top10_vars) {
+      cat("  ALE plot maken voor:", var, "\n")
+      
+      # Controleer of de variabele bestaat in de trainingsdata
+      if(!(var %in% colnames(train_data))) {
+        cat("  Waarschuwing: variabele", var, "niet gevonden in trainingsdata, wordt overgeslagen\n")
+        next
+      }
+      
+      # Bereken ALE waarden
+      ale_data <- create_ale_plot(model, train_data, var)
+      
+      # Selecteer punten voor labels (gelijkmatig verdeeld)
+      num_points <- min(5, nrow(ale_data))  # Maximum 5 punten voor labels
+      point_indices <- round(seq(1, nrow(ale_data), length.out = num_points))
+      label_data <- ale_data[point_indices, ]
+      
+      # Bepaal de leesbare naam voor de variabele
+      var_label <- if(var %in% names(var_mapping)) var_mapping[[var]] else var
+      
+      # Maak plot met doelvariabele-specifieke labels
+      p <- ggplot(ale_data, aes(x = x, y = ale)) +
+        # Voeg een lijn toe
+        geom_line(linewidth = 1.2, color = "steelblue", alpha = 0.8) +
+        # Voeg de rug (rode datapunten) onderaan toe
+        geom_rug(sides = "b", alpha = 0.7, color = "red", size = 1) +
+        # Voeg effect-waarde stippen toe
+        geom_point(data = label_data, aes(x = x, y = ale), 
+                  color = "red", size = 3) +
+        # Voeg labels toe voor de effect-waarden
+        geom_text(data = label_data, 
+                 aes(x = x, y = ale, label = sprintf("%.1f", ale)),
+                 vjust = -0.8, hjust = 0.5, size = 3.5) +
+        labs(
+          title = paste("Effect van", var_label),
+          x = var_label,
+          y = NULL
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 12, face = "bold"),
+          axis.title.x = element_text(size = 10),
+          axis.title.y = element_blank(),
+          axis.text = element_text(size = 9),
+          panel.grid.minor = element_blank()
+        )
+      
+      target_plots[[var]] <- p
+    }
+    
+    # Sla plots op voor deze doelvariabele
+    all_ale_plots[[target_var]] <- target_plots
+    
+    # Maak een gecombineerde plot grid voor deze doelvariabele
+    if (length(target_plots) > 0) {
+      # Voeg één gemeenschappelijke titel toe voor de hele groep plots
+      grid_title <- paste("ALE Plots voor", target_mapping[[target_var]])
+      
+      # Voeg een gemeenschappelijke y-as label toe (één keer voor alle plots)
+      grid_plot <- gridExtra::grid.arrange(
+        gridExtra::arrangeGrob(
+          grobs = target_plots,
+          ncol = 2,
+          left = grid::textGrob("Effect op afhankelijke variabele", rot = 90, gp = grid::gpar(fontsize = 12))
+        ),
+        top = grid::textGrob(grid_title, gp = grid::gpar(fontsize = 14, fontface = "bold"))
+      )
+      print(grid_plot)
+    }
+  }
+  
+  return(all_ale_plots)
+}
+
+# Gebruik de nieuwe functie om ALE plots te maken voor de top 10 variabelen
+top10_ale_plots <- create_ale_plots_top10_variables(
+  models = models,
+  train_data = as.data.frame(train_x),
+  target_variables = target_variables
+)
+```
+
+
+```{r pdp plots}
+#| label: Complete PDP Plot Creation for All Target Variables
+# Function to create PDP plots for all target variables with variable mapping
+create_pdp_plots_all_targets <- function(models, train_data, target_variables) {
+  
+  # Define continuous variables for plots
+  continuous_vars <- c(
+    "WATDTE_m_WATDTE_", "WATERBTE_m_WATERBTE_", "SLIBDTE_m_SLIBDTE_",
+    "zichtdte", "TALBVWTR_graad_TALBVWTR_", "PTN_BEDKG_%_KROOS_", "jaar"
+  )
+  
+  # Variable mapping for readable names
+  var_mapping <- list(
+    "WATDTE_m_WATDTE_" = "Waterdiepte (m)",
+    "WATERBTE_m_WATERBTE_" = "Waterbreedte (m)", 
+    "SLIBDTE_m_SLIBDTE_" = "Slibdikte (m)",
+    "zichtdte" = "Zichtdiepte/Waterdiepte",
+    "TALBVWTR_graad_TALBVWTR_" = "Taludhelling (graden)",
+    "PTN_BEDKG_%_KROOS_" = "Kroosbedekking (%)",
+    "jaar" = "Jaar"
+  )
+  
+  # Target variable mapping for readable names
+  target_mapping <- list(
+    "submers_bedekking" = "Submerse Bedekking (%)",
+    "emers_bedekking" = "Emerse Bedekking (%)",
+    "submers_soorten" = "Submerse Soorten (aantal)",
+    "emers_soorten" = "Emerse Soorten (aantal)"
+  )
+  
+  # Verify which variables exist in training data
+  valid_vars <- intersect(continuous_vars, colnames(train_data))
+  
+  # Store all PDP plots
+  all_pdp_plots <- list()
+  
+  # Loop through each target variable
+  for (target_var in target_variables) {
+    cat("Creating PDP plots for target:", target_var, "\n")
+    
+    model <- models[[target_var]]
+    target_plots <- list()
+    
+    # Create PDP plots for each continuous variable
+    for (var in valid_vars) {
+      cat("  Creating PDP plot for:", var, "\n")
+      
+      # Create partial dependence plot
+      pd <- partial(model, pred.var = var, train = as.data.frame(train_data))
+      
+      # Create plot with target-specific labeling
+      p <- autoplot(pd) +
+        labs(
+          title = paste("Effect van", var_mapping[[var]], "op", target_mapping[[target_var]]),
+          subtitle = "Partial Dependence Plot",
+          x = var_mapping[[var]],
+          y = paste("Effect op", target_mapping[[target_var]])
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 14, face = "bold"),
+          plot.subtitle = element_text(size = 12, color = "darkred"),
+          axis.title = element_text(size = 12),
+          axis.text = element_text(size = 10),
+          panel.grid.minor = element_blank()
+        )
+      
+      target_plots[[var]] <- p
+      print(p)
+    }
+    
+    # Store plots for this target
+    all_pdp_plots[[target_var]] <- target_plots
+    
+    # Create combined plot grid for this target
+    if (length(target_plots) > 0) {
+      if (requireNamespace("gridExtra", quietly = TRUE)) {
+        grid_plot <- gridExtra::grid.arrange(
+          grobs = target_plots, 
+          ncol = 2,
+          top = paste("PDP Plots voor", target_mapping[[target_var]])
+        )
+        print(grid_plot)
+      }
+    }
+    
+    cat("\n")
+  }
+  
+  return(all_pdp_plots)
+}
+
+# Function to create comparison plots of PDPs across targets
+create_comparison_pdp_plots <- function(all_pdp_plots, var_to_compare) {
+  comparison_plots <- list()
+  
+  for (target in names(all_pdp_plots)) {
+    if (var_to_compare %in% names(all_pdp_plots[[target]])) {
+      plot <- all_pdp_plots[[target]][[var_to_compare]] +
+        labs(title = paste(target, "-", var_to_compare)) +
+        theme(plot.title = element_text(size = 12))
+      
+      comparison_plots[[target]] <- plot
+    }
+  }
+  
+  if (length(comparison_plots) > 0) {
+    grid_plot <- gridExtra::grid.arrange(
+      grobs = comparison_plots,
+      ncol = 2,
+      top = paste("Vergelijking PDP plots voor", var_to_compare)
+    )
+    print(grid_plot)
+  }
+  
+  return(comparison_plots)
+}
+
+# Function to create side-by-side comparison of ALE vs PDP plots
+create_ale_pdp_comparison <- function(all_ale_plots, all_pdp_plots, target_var, var_to_compare) {
+  if (!target_var %in% names(all_ale_plots) || !target_var %in% names(all_pdp_plots)) {
+    cat("Target variable not found in plots\n")
+    return(NULL)
+  }
+  
+  if (!var_to_compare %in% names(all_ale_plots[[target_var]]) || 
+      !var_to_compare %in% names(all_pdp_plots[[target_var]])) {
+    cat("Variable not found in plots\n")
+    return(NULL)
+  }
+  
+  # Get plots
+  ale_plot <- all_ale_plots[[target_var]][[var_to_compare]]
+  pdp_plot <- all_pdp_plots[[target_var]][[var_to_compare]]
+  
+  # Modify titles for comparison
+  ale_plot <- ale_plot + 
+    labs(subtitle = "ALE Plot") +
+    theme(plot.title = element_text(size = 14))
+  
+  pdp_plot <- pdp_plot + 
+    labs(subtitle = "PDP Plot") +
+    theme(plot.title = element_text(size = 14))
+  
+  # Arrange side by side
+  comparison <- gridExtra::grid.arrange(
+    ale_plot, pdp_plot, 
+    ncol = 2,
+    top = paste("ALE vs PDP:", var_to_compare, "voor", target_var)
+  )
+  
+  return(comparison)
+}
+
+# Main execution
+# Create PDP plots for all targets
+all_pdp_plots <- create_pdp_plots_all_targets(
+  models = models,
+  train_data = as.data.frame(train_x),
+  target_variables = target_variables
+)
+
+# Create comparison plots for specific variables across all targets
+cat("Creating PDP comparison plots...\n")
+
+# Example: Compare waterbreedte effects across all targets
+waterbreedte_pdp_comparison <- create_comparison_pdp_plots(all_pdp_plots, "WATERBTE_m_WATERBTE_")
+
+# Example: Compare waterdiepte effects across all targets  
+waterdiepte_pdp_comparison <- create_comparison_pdp_plots(all_pdp_plots, "WATDTE_m_WATDTE_")
+
+# Example: Compare kroos effects across all targets
+kroos_pdp_comparison <- create_comparison_pdp_plots(all_pdp_plots, "PTN_BEDKG_%_KROOS_")
+
+# Create direct ALE vs PDP comparisons for important variables
+cat("Creating ALE vs PDP comparison plots...\n")
+
+# Compare ALE vs PDP for waterdiepte effect on submerse vegetation
+create_ale_pdp_comparison(all_ale_plots, all_pdp_plots, "submers_bedekking", "WATDTE_m_WATDTE_")
+
+# Compare ALE vs PDP for zichtdiepte effect on submerse vegetation
+create_ale_pdp_comparison(all_ale_plots, all_pdp_plots, "submers_bedekking", "zichtdte")
+
+# Compare ALE vs PDP for waterbreedte effect on emerse vegetation
+create_ale_pdp_comparison(all_ale_plots, all_pdp_plots, "emers_bedekking", "WATERBTE_m_WATERBTE_")
+
+# Compare ALE vs PDP for kroosbedekking effect on submerse vegetation
+create_ale_pdp_comparison(all_ale_plots, all_pdp_plots, "submers_bedekking", "PTN_BEDKG_%_KROOS_")
+
+cat("PDP plots creation completed for all target variables!\n")
+```
+
+# Alle variabelen in de huidige sessie opslaan
+
+```{r}
+# save.image("anlb_project.RData")
+```
+
+
+
+
 
 # NOT USED (old/ backup)
 
