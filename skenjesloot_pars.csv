@@ -1,0 +1,42 @@
+parameterid;naam;vraag sken je sloot;parameter;parameterfractie;eenheid;2017;2018;2019;2020;2021;2022;2023;2024
+Astacoidea_AANWZHD;Kreeften aangetroffen;0;Astacoidea;"";DIMSLS;0;0;262;413;335;302;331;0
+BAGGEREN5JAAR;Hoevaak is de sloot in de afgelopen 5 jaar gebaggerd?;Hoevaak is de sloot in de afgelopen 5 jaar gebaggerd?;BAGGEREN5JAAR;"";"";0;0;0;0;0;0;331;240
+BEHMRGLHDG;aantal jaar beheerpakket;Hoeveel jaar voert u al het <b>huidige</b> beheerpakket al uit?;BEHMRGLHDG;"";"";0;0;0;0;0;0;0;240
+BEHMRGL_a;duur van beheermaatregel.;Hoeveel jaar voert u al <b>vergelijkbaar</b> beheer (bv SNL) uit voorafgaand aan het beheerpakket?;BEHMRGL;"";a;155;190;163;255;335;302;331;240
+BEHPKBBZ_SOORT;Bemestingsvrije bufferzone;Bemestingsvrije bufferzone;BEHPKBBZ;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKBWW_SOORT;Botanisch waardevolle weiderand;Botanisch waardevolle weiderand;BEHPKBWW;"";DIMSLS;155;261;258;271;335;302;263;157
+BEHPKDZSBH_ESKS_SOORT;Ecologisch slootschonen voor krabbenscheervegetaties;Ecologisch slootschonen voor krabbenscheervegetaties;BEHPKDZSBH_ESKS;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKDZSBH_ES_SOORT;Ecologisch slootschonen;Ecologisch slootschonen;BEHPKDZSBH_ES;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKINUDTE_SOORT;Inundatie 15 februari t/m 15 mei;Inundatie 15 februari – 15 mei;BEHPKINUDTE;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKRDZSBH_BB_SOORT;Baggeren met baggerpomp;Baggeren met baggerpomp;BEHPKRDZSBH_BB;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKRKA_SOORT;Rand klasse A;Rand klasse A;BEHPKRKA;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPKRZM_SOORT;Rietzoom;Rietzoom;BEHPKRZM;"";DIMSLS;155;261;258;255;335;302;263;157
+BEHPOverig;beheerpakket overig;Ander beheerpakket;BEHPOverig;"";"";0;258;258;255;335;302;263;157
+BEHP_AANWZG;aantal beheerpakketten;;pktaanwez;;;310;548;526;826;670;604;662;480
+BEHRPKNVO_SOORT;Natuurvriendelijke oever;Natuurvriendelijke oever;BEHRPKNVO;"";DIMSLS;155;261;258;255;335;302;263;157
+BEMSDOVZDE_SOORT;Bemonsterde oeverzijde (uitgedrukt in waardebereik);Op welke oever staat u nu?;BEMSDOVZDE;"";DIMSLS;155;274;263;413;335;302;331;240
+GANZEN;veel ganzen op percelen;Heeft u afgelopen jaar een groep ganzen (>10 stuks) op uw perceel gehad?;GANZEN;"";"";0;0;0;0;0;0;331;240
+GEUR_SOORT;Geur (uitgedrukt in waardebereik);Heeft het water een specifieke geur?;GEUR;"";DIMSLS;155;274;263;413;335;302;331;240
+GRONDST_SOORT;Grondsoort (uitgedrukt in waardebereik);Wat is de grondsoort net boven de waterlijn?;GRONDST;"";DIMSLS;155;274;263;413;335;302;331;240
+KLEUR_SOORT;Kleur (uitgedrukt in waardebereik);Wat is de kleur van het water?;KLEUR;"";DIMSLS;155;274;263;413;335;302;331;240
+LANDGBK_SOORT;Landgebruik langs sloot;Wat is het landgebruik van het aangrenzende perceel?;LANDGBK;"";DIMSLS;155;274;263;413;335;302;331;240
+OEVBSIG_SOORT;Oeverbeschoeiing (uitgedrukt in waardebereik);Resultaat beschoeing;OEVBSIG;"";DIMSLS;155;274;263;413;335;302;331;240
+PERODSLSBGODHD_a;periode sinds laatste baggeronderhoud;Wanneer was er voor het laatst baggeronderhoud in het traject?;PERODSLSBGODHD;"";a;155;274;263;413;335;302;331;240
+PERODSLSSNG_mnd;periode sinds laatste schoning;Wanneer is de sloot voor het laatst geschoond, ter hoogte van het traject?;PERODSLSSNG;"";mnd;155;274;263;413;335;302;331;240
+PTN_AANWZHD;Planten aanwezigheid;"";PTN_AANWZHD;"";DIMSLS;540;795;630;1291;671;705;1213;797
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;DRAADALG;SUBMS;%;0;0;0;0;0;302;331;240
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;DRIJFBPTN;"";%;155;274;263;413;335;302;331;240
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;EMSPTN;"";%;155;274;263;413;335;302;331;240
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;FLAB;DRIJVD;%;155;274;263;413;335;302;331;240
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;KROOS;"";%;155;274;263;413;335;302;331;240
+PTN_BEDKG_%;Plantenbedekking (%);Bedekking ondergedoken vegetatie;SUBMSPTN;"";%;155;274;263;413;335;302;331;240
+RIVIERKREEFTENLAND;kreeften gevonden;Heeft u het afgelopen jaar kreeften (levend of dood) gevonden in of rondom uw sloot?;Astacoidea_AANWZHD;"";"";0;0;0;0;0;0;0;240
+SCHONEN5JAAR;Hoevaak is de sloot in de afgelopen 5 jaar geschoond?;Hoevaak is de sloot in de afgelopen 5 jaar geschoond?;SCHONEN5JAAR;"";"";0;0;0;0;0;0;331;240
+SLIBDTE_m;Slibdikte (m);Dikte baggerlaag (cm);SLIBDTE;"";m;465;822;789;1239;1005;906;993;720
+TALBVWTR_SOORT;Taludhoek boven water (uitgedrukt in waardebereik);Hoe is het talud onder de watergrens?;TALBVWTR;"";DIMSLS;155;274;263;413;335;302;331;240
+TYPESLSSNG;machine voor eco-schonen;Welke machine heeft u gebruikt voor het (ecologisch) slootschonen?;TYPESLSSNG;"";"";0;0;0;400;335;301;331;232
+VISSN_AANWZHD;Aanwezigheid vis;Zijn er in het traject grote vissen (>30cm) aanwezig?;VISSN;"";DIMSLS;0;274;263;413;335;302;331;240
+WATDTE_m;Waterdiepte (m);Diepte op armlengte vanaf de waterlijn (cm);WATDTE;"";m;465;822;265;413;335;302;331;240
+WATERBTE_m;Waterbreedte (m);Gemiddelde breedte sloot (op 0.5 m nauwkeurig);WATERBTE;"";m;155;274;263;413;335;302;331;240
+ZICHT_m;Doorzicht (m);Doorzicht (cm);ZICHT;"";m;465;822;265;413;335;302;331;240
+blnGesneden;oevers gesneden bij schonen;Worden de oeverkanten gesneden voor er geschoond wordt?;blnGesneden;"";"";0;0;0;365;335;302;331;231
