@@ -3271,9 +3271,7 @@ ggsave("submerse_vegetatie_volledig.png",
                                        gp = grid::gpar(fontsize = 16, fontface = "bold"))),
        width = 16, height = 14, units = "in", dpi = 300)
 
-
 ```
-
 
 
 #### hybi - parameters oud en vaak niet werkend
@@ -5891,7 +5889,6 @@ model_data_xgb[, (factor_cols) := lapply(.SD, as.numeric), .SDcols = factor_cols
 
 ```
 
-
 ```{r correlatie check}
 #| label: xgboost parameters check
 
@@ -5932,6 +5929,67 @@ ggcorrplot(cor_matrix,
 
 ```
 
+```{r overzichtelijke correlaties}
+remove_cols <- setdiff(names(model_data_xgb), c(
+  "locatie", "EAGIDENT", "anlb", "compartiment"
+))
+cor_matrix <- model_data_xgb[, ..remove_cols]
+# Remove rows with NA values
+cor_matrix <- na.omit(cor_matrix)
+# Calculate correlation matrix
+cor_matrix <- cor(cor_matrix, use = "pairwise.complete.obs")
+# colnames(cor_matrix)
+# Definieer de labels
+label_mapping <- c(
+  "submers_bedekking" = "Submerse bedekking (%)",
+  "emers_bedekking" = "Emerse bedekking (%)",
+  "submers_soorten" = "Aantal submerse soorten",
+  "emers_soorten" = "Aantal emerse soorten",
+  "anlb" = "ANLB (ja/nee)",
+  "njaaranlb" = "Aantal jaar ANLB",
+  "baggeren" = "Pakket baggeren",
+  "slootschonen" = "Pakket slootschonen",
+  "water" = "Waterpakket",
+  "bufferzone" = "Pakket bufferzone",
+  "pakket_n_anlb" = "Aantal pakketten",
+  "WATDTE_m_WATDTE_" = "Waterdiepte (m)",
+  "WATERBTE_m_WATERBTE_" = "Waterbreedte (m)",
+  "SLIBDTE_m_SLIBDTE_" = "Slibdikte (m)",
+  "zichtdte" = "Zichtdiepte (m)",
+  "TALBVWTR_graad_TALBVWTR_" = "Taludhoek (graden)",
+  "A_P_AL" = "P-AL bodem",
+  "A_SOM_LOI" = "Organische stof (%)",
+  "P_tot" = "P-belasting (mg/m²/dag)",
+  "mm/d" = "Verblijftijd (mm/dag)",
+  "pvskp" = "P-belasting vs kritieke belasting",
+  "rel_water" = "Fractie open water",
+  "PTN_BEDKG_%_FLAB_" = "Flab bedekking (%)",
+  "PTN_BEDKG_%_KROOS_" = "Kroos bedekking (%)",
+  "jaar" = "Meetjaar"
+
+)
+
+# Hernoem rijen en kolommen
+rownames(cor_matrix) <- label_mapping[rownames(cor_matrix)]
+colnames(cor_matrix) <- label_mapping[colnames(cor_matrix)]
+
+# Maak correlaties kleiner dan drempelwaarde wit
+cor_matrix_filtered <- cor_matrix
+cor_matrix_filtered[abs(cor_matrix) < 0.3] <- NA
+
+# Create correlation plot - volledige matrix
+library(ggcorrplot)
+
+ggcorrplot(cor_matrix_filtered, 
+           hc.order = FALSE,
+           type = "full",
+           lab = TRUE,           
+           lab_size = 4,         
+           tl.cex = 14,          
+           show.diag = FALSE,    
+           title = "Correlatie tussen omgevingsvariabelen en beheer en vegetatie",
+           ggtheme = ggplot2::theme_minimal())
+```
 
 ```{r xgboost target loop}
 
